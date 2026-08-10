@@ -187,6 +187,7 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
       return {
         'Employee ID': selectedUser.employeeId,
         'Employee Name': selectedUser.name,
+        Branch: s.branch || selectedUser.branch || selectedUser.department || 'Main Branch',
         Department: selectedUser.department,
         Date: formatDateMDYYYY(s.date),
         Day: s.weekday,
@@ -458,8 +459,10 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
           </div>
 
           <div>
-            <span className="text-[10px] uppercase font-black text-gray-500 tracking-wider block">Department / Branch:</span>
-            <span className="text-sm font-bold text-zinc-800">{selectedUser.department}</span>
+            <span className="text-[10px] uppercase font-black text-gray-500 tracking-wider block">Branch / Department:</span>
+            <span className="text-sm font-bold text-zinc-800">
+              {selectedUser.branch || selectedUser.department || 'Main Branch'}
+            </span>
           </div>
 
           <div>
@@ -470,11 +473,12 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
 
         {/* DTR ATTENDANCE LOG TABLE */}
         <div className="overflow-x-auto border-2 border-zinc-900 rounded-xl">
-          <table className="w-full text-left text-xs min-w-[900px]">
+          <table className="w-full text-left text-xs min-w-[950px]">
             <thead className="bg-zinc-900 text-amber-400 font-black uppercase text-[11px] tracking-wider border-b-2 border-zinc-900">
               <tr>
                 <th className="p-2.5">Date</th>
                 <th className="p-2.5">Day</th>
+                <th className="p-2.5">Branch</th>
                 <th className="p-2.5 text-center">Clock In (Time-In)</th>
                 <th className="p-2.5 text-center">Break Out</th>
                 <th className="p-2.5 text-center">Break In</th>
@@ -488,7 +492,7 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
             <tbody className="divide-y divide-zinc-200 font-medium">
               {employeeDtrLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="p-8 text-center text-gray-400 italic font-bold">
+                  <td colSpan={11} className="p-8 text-center text-gray-400 italic font-bold">
                     No attendance logs recorded for this employee during selected date range.
                   </td>
                 </tr>
@@ -516,6 +520,11 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
                       </td>
                       <td className="p-2.5 font-bold text-zinc-700 whitespace-nowrap">
                         {s.weekday}
+                      </td>
+                      <td className="p-2.5 font-bold text-zinc-800 whitespace-nowrap">
+                        <span className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-300 text-[11px] font-bold text-zinc-900">
+                          {s.branch || selectedUser.branch || selectedUser.department || 'Main Branch'}
+                        </span>
                       </td>
                       <td className="p-2.5 text-center font-mono font-bold text-zinc-900 whitespace-nowrap">
                         {s.firstIn ? (

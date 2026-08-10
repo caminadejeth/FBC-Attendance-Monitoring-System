@@ -646,6 +646,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                   <tr>
                     <th className="px-2.5 py-2">ID</th>
                     <th className="px-2.5 py-2">Employee Name</th>
+                    <th className="px-2.5 py-2">Branch</th>
                     <th className="px-2.5 py-2">Date</th>
                     <th className="px-2.5 py-2">Day</th>
                     <th className="px-2.5 py-2">Clock In</th>
@@ -664,7 +665,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                 <tbody className="divide-y divide-gray-100 font-medium">
                   {paginatedDailySummaries.length === 0 ? (
                     <tr>
-                      <td colSpan={15} className="p-8 text-center text-gray-400">
+                      <td colSpan={16} className="p-8 text-center text-gray-400">
                         No matching attendance records found for selected period.
                       </td>
                     </tr>
@@ -698,6 +699,11 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                           <td className="px-2.5 py-2">
                             <div className="font-bold text-[#2C3524] text-xs">{s.employeeName}</div>
                             <div className="text-[10px] text-gray-400 font-medium">{s.department}</div>
+                          </td>
+                          <td className="px-2.5 py-2 whitespace-nowrap">
+                            <span className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-900">
+                              {s.branch || s.department || 'Main Branch'}
+                            </span>
                           </td>
                           <td className="px-2.5 py-2 font-mono font-bold text-[#2C3524] whitespace-nowrap text-[11px]">
                             {formatDateMDYYYY(s.date)}
