@@ -1175,6 +1175,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             ctoAdjustments={ctoAdjustments}
             onSubmitCtoRequest={onSubmitCtoRequest}
             onUpdateSummaryAnomaly={onUpdateSummaryAnomaly}
+            onSubmitDispute={onSubmitDispute}
           />
 
           {/* MY DISPUTES TRACKER */}
