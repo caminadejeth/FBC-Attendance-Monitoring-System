@@ -1,0 +1,145 @@
+{
+  "entities": {
+    "users": {
+      "title": "User",
+      "description": "System user profiles and employees",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "name": { "type": "string" },
+        "firstName": { "type": "string" },
+        "middleName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "email": { "type": "string" },
+        "pin": { "type": "string" },
+        "role": { "type": "string" },
+        "department": { "type": "string" },
+        "branch": { "type": "string" },
+        "position": { "type": "string" },
+        "hourlyRate": { "type": "number" },
+        "dateHired": { "type": "string" },
+        "status": { "type": "string" },
+        "avatarUrl": { "type": "string" }
+      },
+      "required": ["id", "employeeId", "name", "role", "pin"]
+    },
+    "summaries": {
+      "title": "AttendanceSummaryDaily",
+      "description": "Daily attendance summaries",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "department": { "type": "string" },
+        "branch": { "type": "string" },
+        "date": { "type": "string" },
+        "weekday": { "type": "string" },
+        "firstIn": { "type": "string" },
+        "lastOut": { "type": "string" },
+        "breakOut": { "type": "string" },
+        "breakIn": { "type": "string" },
+        "totalBreakMinutes": { "type": "number" },
+        "netHoursWorked": { "type": "number" },
+        "undertimeHours": { "type": "number" },
+        "overtimeHours": { "type": "number" },
+        "ctoHoursEarned": { "type": "number" },
+        "targetHours": { "type": "number" },
+        "status": { "type": "string" },
+        "anomalies": { "type": "array", "items": { "type": "string" } },
+        "punches": { "type": "array", "items": { "type": "object" } }
+      },
+      "required": ["id", "employeeId", "date"]
+    },
+    "punches": {
+      "title": "BiometricPunch",
+      "description": "Biometric punch logs",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "type": { "type": "string" },
+        "deviceId": { "type": "string" }
+      },
+      "required": ["id", "employeeId", "timestamp", "type"]
+    },
+    "disputes": {
+      "title": "DisputeRequest",
+      "description": "Attendance dispute requests",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "type": { "type": "string" },
+        "category": { "type": "string" },
+        "date": { "type": "string" },
+        "requestedClockIn": { "type": "string" },
+        "requestedClockOut": { "type": "string" },
+        "reason": { "type": "string" },
+        "status": { "type": "string" },
+        "submittedAt": { "type": "string" }
+      },
+      "required": ["id", "employeeId", "reason", "status"]
+    },
+    "schedules": {
+      "title": "WorkSchedule",
+      "description": "Work schedule rosters",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "department": { "type": "string" },
+        "branch": { "type": "string" },
+        "shiftName": { "type": "string" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "workDays": { "type": "array", "items": { "type": "string" } },
+        "effectiveDate": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["id", "employeeId"]
+    },
+    "ctoRequests": {
+      "title": "CtoRequest",
+      "description": "CTO Leave and EARN requests",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "department": { "type": "string" },
+        "branch": { "type": "string" },
+        "requestType": { "type": "string" },
+        "hoursRequested": { "type": "number" },
+        "date": { "type": "string" },
+        "reason": { "type": "string" },
+        "status": { "type": "string" },
+        "managerApproved": { "type": "boolean" },
+        "payrollApproved": { "type": "boolean" },
+        "submittedAt": { "type": "string" }
+      },
+      "required": ["id", "employeeId"]
+    },
+    "ctoAdjustments": {
+      "title": "CtoManualAdjustment",
+      "description": "Manual CTO balance adjustments",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "type": { "type": "string" },
+        "amount": { "type": "number" },
+        "reason": { "type": "string" },
+        "adjustedBy": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "employeeId", "amount"]
+    }
+  }
+}

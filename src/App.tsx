@@ -36,6 +36,12 @@ import { GoogleSheetsSyncModal } from './components/GoogleSheetsSyncModal';
 import { buildGoogleSheetsData, syncToGoogleSheets } from './utils/googleSheetsSync';
 import { showSyncConfirmAlert } from './utils/sweetAlerts';
 import { YellowCabCheckerboard } from './components/YellowCabBrand';
+import {
+  subscribeCollection,
+  saveDocument,
+  saveDocuments,
+  removeDocument,
+} from './lib/firestoreSync';
 
 const loadFromStorage = <T,>(key: string, fallback: T): T => {
   try {
@@ -50,7 +56,7 @@ const loadFromStorage = <T,>(key: string, fallback: T): T => {
 };
 
 export default function App() {
-  // Persistent State Management via localStorage
+  // Authentication & Users State
   const [currentUser, setCurrentUser] = useState<User | null>(() =>
     loadFromStorage<User | null>('fbc_current_user', null)
   );
@@ -76,7 +82,28 @@ export default function App() {
     loadFromStorage<CtoManualAdjustment[]>('fbc_cto_adjustments', INITIAL_CTO_ADJUSTMENTS)
   );
 
-  // Sync state changes to localStorage
+  // Real-Time Firebase Firestore Cloud Database Subscriptions across all devices/users
+  useEffect(() => {
+    const unsubUsers = subscribeCollection('users', INITIAL_USERS, setUsers);
+    const unsubSummaries = subscribeCollection('summaries', INITIAL_DAILY_SUMMARIES, setSummaries);
+    const unsubPunches = subscribeCollection('punches', INITIAL_PUNCHES, setPunches);
+    const unsubDisputes = subscribeCollection('disputes', INITIAL_DISPUTES, setDisputes);
+    const unsubSchedules = subscribeCollection('schedules', INITIAL_SCHEDULES, setSchedules);
+    const unsubCtoReq = subscribeCollection('ctoRequests', INITIAL_CTO_REQUESTS, setCtoRequests);
+    const unsubCtoAdj = subscribeCollection('ctoAdjustments', INITIAL_CTO_ADJUSTMENTS, setCtoAdjustments);
+
+    return () => {
+      unsubUsers();
+      unsubSummaries();
+      unsubPunches();
+      unsubDisputes();
+      unsubSchedules();
+      unsubCtoReq();
+      unsubCtoAdj();
+    };
+  }, []);
+
+  // Sync current logged-in user session to localStorage
   useEffect(() => {
     try {
       if (currentUser) {
@@ -89,70 +116,16 @@ export default function App() {
     }
   }, [currentUser]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('fbc_users', JSON.stringify(users));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [users]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('fbc_summaries', JSON.stringify(summaries));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [summaries]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('fbc_punches', JSON.stringify(punches));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [punches]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('fbc_disputes', JSON.stringify(disputes));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [disputes]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('fbc_schedules', JSON.stringify(schedules));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [schedules]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('fbc_cto_requests', JSON.stringify(ctoRequests));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [ctoRequests]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('fbc_cto_adjustments', JSON.stringify(ctoAdjustments));
-    } catch (e) {
-      console.error(e);
-    }
-  }, [ctoAdjustments]);
-
   const handleUpdateSummaryAnomaly = (summaryId: string, newNote: string) => {
     setSummaries((prev) =>
       prev.map((s) => {
         if (s.id === summaryId) {
-          return {
+          const updated = {
             ...s,
             anomalies: newNote.trim() ? [newNote.trim()] : [],
           };
+          saveDocument('summaries', updated);
+          return updated;
         }
         return s;
       })
@@ -160,6 +133,7 @@ export default function App() {
   };
 
   const handleSaveSchedule = (updatedSchedule: WorkSchedule) => {
+    saveDocument('schedules', updatedSchedule);
     setSchedules((prev) => {
       const idx = prev.findIndex(
         (s) =>
@@ -176,6 +150,11 @@ export default function App() {
   };
 
   const handleUpdateUserPin = (userId: string, newPin: string) => {
+    const targetUser = users.find((u) => u.id === userId);
+    if (targetUser) {
+      const updated = { ...targetUser, pin: newPin };
+      saveDocument('users', updated);
+    }
     setUsers((prev) =>
       prev.map((u) => (u.id === userId ? { ...u, pin: newPin } : u))
     );
@@ -213,7 +192,7 @@ export default function App() {
 
   // Handle uploaded biometric file processing
   const handleUploadProcessed = (newSummaries: AttendanceSummaryDaily[]) => {
-    // Merge new summaries with existing, overriding matching ID or date+empId
+    saveDocuments('summaries', newSummaries);
     setSummaries((prev) => {
       const map = new Map<string, AttendanceSummaryDaily>();
       prev.forEach((s) => map.set(`${s.employeeId}_${s.date}`, s));
@@ -226,20 +205,27 @@ export default function App() {
   const handleApproveDispute = (disputeId: string, adminNotes: string) => {
     const currentNow = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
+    let updatedDisputeItem: DisputeRequest | null = null;
     setDisputes((prev) =>
-      prev.map((d) =>
-        d.id === disputeId
-          ? {
-              ...d,
-              status: 'APPROVED',
-              adminNotes,
-              reviewedBy: currentUser?.name || 'Branch Manager / Admin',
-              reviewedAt: currentNow,
-              approvedAt: currentNow,
-            }
-          : d
-      )
+      prev.map((d) => {
+        if (d.id === disputeId) {
+          const item: DisputeRequest = {
+            ...d,
+            status: 'APPROVED',
+            adminNotes,
+            reviewedBy: currentUser?.name || 'Branch Manager / Admin',
+            reviewedAt: currentNow,
+            approvedAt: currentNow,
+          };
+          updatedDisputeItem = item;
+          return item;
+        }
+        return d;
+      })
     );
+    if (updatedDisputeItem) {
+      saveDocument('disputes', updatedDisputeItem);
+    }
 
     // Find the dispute to adjust the daily summary record
     const targetDispute = disputes.find((d) => d.id === disputeId);
@@ -294,12 +280,13 @@ export default function App() {
 
       const reasonNote = `Time Adjustment (${cat}) Approved: ${targetDispute.reason}${adminNotes ? ` (Notes: ${adminNotes})` : ''}`;
 
+      let updatedSummaryItem: AttendanceSummaryDaily | null = null;
       setSummaries((prev) => {
         let found = false;
         const updated = prev.map((s) => {
           if (s.employeeId === targetDispute.employeeId && parseToYYYYMMDD(s.date) === targetDate) {
             found = true;
-            return {
+            const item: AttendanceSummaryDaily = {
               ...s,
               status: finalStatus,
               firstIn: reqIn,
@@ -313,6 +300,8 @@ export default function App() {
               isAdjusted: true,
               adjustmentNote: targetDispute.reason,
             };
+            updatedSummaryItem = item;
+            return item;
           }
           return s;
         });
@@ -342,11 +331,16 @@ export default function App() {
             isAdjusted: true,
             adjustmentNote: targetDispute.reason,
           };
+          updatedSummaryItem = newSummary;
           return [newSummary, ...prev];
         }
 
         return updated;
       });
+
+      if (updatedSummaryItem) {
+        saveDocument('summaries', updatedSummaryItem);
+      }
     }
   };
 
@@ -354,19 +348,26 @@ export default function App() {
   const handleRejectDispute = (disputeId: string, adminNotes: string) => {
     const currentNow = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
+    let updatedDisputeItem: DisputeRequest | null = null;
     setDisputes((prev) =>
-      prev.map((d) =>
-        d.id === disputeId
-          ? {
-              ...d,
-              status: 'REJECTED',
-              adminNotes,
-              reviewedBy: currentUser?.name || 'Branch Manager / Admin',
-              reviewedAt: currentNow,
-            }
-          : d
-      )
+      prev.map((d) => {
+        if (d.id === disputeId) {
+          const item: DisputeRequest = {
+            ...d,
+            status: 'REJECTED',
+            adminNotes,
+            reviewedBy: currentUser?.name || 'Branch Manager / Admin',
+            reviewedAt: currentNow,
+          };
+          updatedDisputeItem = item;
+          return item;
+        }
+        return d;
+      })
     );
+    if (updatedDisputeItem) {
+      saveDocument('disputes', updatedDisputeItem);
+    }
   };
 
   // Handle Staff submitting new dispute
@@ -379,6 +380,7 @@ export default function App() {
       status: 'PENDING',
       submittedAt: new Date().toISOString().replace('T', ' ').substring(0, 19),
     };
+    saveDocument('disputes', dispute);
     setDisputes((prev) => [dispute, ...prev]);
   };
 
@@ -394,6 +396,7 @@ export default function App() {
       payrollApproved: false,
       submittedAt: new Date().toISOString().replace('T', ' ').substring(0, 19),
     };
+    saveDocument('ctoRequests', req);
     setCtoRequests((prev) => [req, ...prev]);
   };
 
@@ -402,6 +405,7 @@ export default function App() {
     const role = approverRole || (currentUser?.role === 'BRANCH_MANAGER' || currentUser?.role === 'SHIFT_MANAGER' ? 'MANAGER' : 'PAYROLL');
 
     let approvedReq: CtoRequest | null = null;
+    let updatedCtoItem: CtoRequest | null = null;
 
     setCtoRequests((prev) =>
       prev.map((r) => {
@@ -438,14 +442,20 @@ export default function App() {
           approvedReq = updated;
         }
 
+        updatedCtoItem = updated;
         return updated;
       })
     );
+
+    if (updatedCtoItem) {
+      saveDocument('ctoRequests', updatedCtoItem);
+    }
 
     // If fully approved and it's a LEAVE request, mark Attendance Summary as LEAVE
     if (approvedReq) {
       const target: CtoRequest = approvedReq;
       if (target.requestType !== 'CREDIT') {
+        let updatedSummaryItem: AttendanceSummaryDaily | null = null;
         setSummaries((prevSummaries) => {
           const existingIdx = prevSummaries.findIndex(
             (s) => s.employeeId === target.employeeId && s.date === target.date
@@ -453,13 +463,15 @@ export default function App() {
 
           if (existingIdx >= 0) {
             const next = [...prevSummaries];
-            next[existingIdx] = {
+            const item = {
               ...next[existingIdx],
-              status: 'LEAVE',
+              status: 'LEAVE' as AttendanceStatus,
               isAdjusted: true,
               adjustmentNote: `Approved CTO Leave (${target.hoursRequested}h) - Approved by ${target.managerApprovedBy || 'Manager'} & ${target.payrollApprovedBy || 'Payroll'}`,
               anomalies: Array.from(new Set([...(next[existingIdx].anomalies || []), 'Approved CTO Leave'])),
             };
+            next[existingIdx] = item;
+            updatedSummaryItem = item;
             return next;
           } else {
             const newSummary: AttendanceSummaryDaily = {
@@ -483,9 +495,14 @@ export default function App() {
               isAdjusted: true,
               adjustmentNote: `Approved CTO Leave (${target.hoursRequested}h) - Approved by ${target.managerApprovedBy || 'Manager'} & ${target.payrollApprovedBy || 'Payroll'}`,
             };
+            updatedSummaryItem = newSummary;
             return [newSummary, ...prevSummaries];
           }
         });
+
+        if (updatedSummaryItem) {
+          saveDocument('summaries', updatedSummaryItem);
+        }
       }
     }
   };
@@ -506,19 +523,27 @@ export default function App() {
       ? `${currentUser.name} (${rejectorRole})`
       : 'Branch Manager';
 
+    let updatedItem: CtoRequest | null = null;
     setCtoRequests((prev) =>
-      prev.map((r) =>
-        r.id === id
-          ? {
-              ...r,
-              status: 'REJECTED',
-              reviewNotes: notes || 'CTO Request Disapproved',
-              reviewedBy: rejectorIdentity,
-              reviewedAt: currentNow,
-            }
-          : r
-      )
+      prev.map((r) => {
+        if (r.id === id) {
+          const item: CtoRequest = {
+            ...r,
+            status: 'REJECTED',
+            reviewNotes: notes || 'CTO Request Disapproved',
+            reviewedBy: rejectorIdentity,
+            reviewedAt: currentNow,
+          };
+          updatedItem = item;
+          return item;
+        }
+        return r;
+      })
     );
+
+    if (updatedItem) {
+      saveDocument('ctoRequests', updatedItem);
+    }
   };
 
   const handleAddCtoManualAdjustment = (
@@ -529,19 +554,23 @@ export default function App() {
       id: `cto-adj-${Date.now()}`,
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
     };
+    saveDocument('ctoAdjustments', record);
     setCtoAdjustments((prev) => [record, ...prev]);
   };
 
   // Add / Edit User handlers
   const handleAddUser = (newUser: User) => {
+    saveDocument('users', newUser);
     setUsers((prev) => [...prev, newUser]);
   };
 
   const handleUpdateUser = (updatedUser: User) => {
+    saveDocument('users', updatedUser);
     setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
   };
 
   const handleDeleteUser = (userId: string) => {
+    removeDocument('users', userId);
     setUsers((prev) => prev.filter((u) => u.id !== userId));
   };
 
