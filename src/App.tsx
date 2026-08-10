@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AttendanceStatus,
   AttendanceSummaryDaily,
@@ -37,22 +37,113 @@ import { buildGoogleSheetsData, syncToGoogleSheets } from './utils/googleSheetsS
 import { showSyncConfirmAlert } from './utils/sweetAlerts';
 import { YellowCabCheckerboard } from './components/YellowCabBrand';
 
+const loadFromStorage = <T,>(key: string, fallback: T): T => {
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (err) {
+    console.error(`Failed to load ${key} from localStorage`, err);
+  }
+  return fallback;
+};
+
 export default function App() {
-  // Authentication & Users State
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  // Persistent State Management via localStorage
+  const [currentUser, setCurrentUser] = useState<User | null>(() =>
+    loadFromStorage<User | null>('fbc_current_user', null)
+  );
+  const [users, setUsers] = useState<User[]>(() =>
+    loadFromStorage<User[]>('fbc_users', INITIAL_USERS)
+  );
+  const [summaries, setSummaries] = useState<AttendanceSummaryDaily[]>(() =>
+    loadFromStorage<AttendanceSummaryDaily[]>('fbc_summaries', INITIAL_DAILY_SUMMARIES)
+  );
+  const [punches, setPunches] = useState<BiometricPunch[]>(() =>
+    loadFromStorage<BiometricPunch[]>('fbc_punches', INITIAL_PUNCHES)
+  );
+  const [disputes, setDisputes] = useState<DisputeRequest[]>(() =>
+    loadFromStorage<DisputeRequest[]>('fbc_disputes', INITIAL_DISPUTES)
+  );
+  const [schedules, setSchedules] = useState<WorkSchedule[]>(() =>
+    loadFromStorage<WorkSchedule[]>('fbc_schedules', INITIAL_SCHEDULES)
+  );
+  const [ctoRequests, setCtoRequests] = useState<CtoRequest[]>(() =>
+    loadFromStorage<CtoRequest[]>('fbc_cto_requests', INITIAL_CTO_REQUESTS)
+  );
+  const [ctoAdjustments, setCtoAdjustments] = useState<CtoManualAdjustment[]>(() =>
+    loadFromStorage<CtoManualAdjustment[]>('fbc_cto_adjustments', INITIAL_CTO_ADJUSTMENTS)
+  );
 
-  // Attendance & Biometric State
-  const [summaries, setSummaries] = useState<AttendanceSummaryDaily[]>(INITIAL_DAILY_SUMMARIES);
-  const [punches, setPunches] = useState<BiometricPunch[]>(INITIAL_PUNCHES);
-  const [disputes, setDisputes] = useState<DisputeRequest[]>(INITIAL_DISPUTES);
+  // Sync state changes to localStorage
+  useEffect(() => {
+    try {
+      if (currentUser) {
+        localStorage.setItem('fbc_current_user', JSON.stringify(currentUser));
+      } else {
+        localStorage.removeItem('fbc_current_user');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, [currentUser]);
 
-  // Work Schedule Roster State
-  const [schedules, setSchedules] = useState<WorkSchedule[]>(INITIAL_SCHEDULES);
+  useEffect(() => {
+    try {
+      localStorage.setItem('fbc_users', JSON.stringify(users));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [users]);
 
-  // CTO State
-  const [ctoRequests, setCtoRequests] = useState<CtoRequest[]>(INITIAL_CTO_REQUESTS);
-  const [ctoAdjustments, setCtoAdjustments] = useState<CtoManualAdjustment[]>(INITIAL_CTO_ADJUSTMENTS);
+  useEffect(() => {
+    try {
+      localStorage.setItem('fbc_summaries', JSON.stringify(summaries));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [summaries]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('fbc_punches', JSON.stringify(punches));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [punches]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('fbc_disputes', JSON.stringify(disputes));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [disputes]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('fbc_schedules', JSON.stringify(schedules));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [schedules]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('fbc_cto_requests', JSON.stringify(ctoRequests));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [ctoRequests]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('fbc_cto_adjustments', JSON.stringify(ctoAdjustments));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [ctoAdjustments]);
 
   const handleUpdateSummaryAnomaly = (summaryId: string, newNote: string) => {
     setSummaries((prev) =>
