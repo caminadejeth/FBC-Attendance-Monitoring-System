@@ -148,7 +148,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ users, onLoginSuccess 
                   <input
                     id="input-user-id"
                     type="text"
-                    placeholder="e.g. 7654321"
+                    placeholder="e.g. 1234567"
                     value={userIdInput}
                     onChange={(e) => {
                       setUserIdInput(e.target.value);
