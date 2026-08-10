@@ -1,0 +1,6 @@
+{
+  "name": "FBC Attendance Monitoring System",
+  "description": "Internal attendance monitoring system for FBC Restaurants Corp featuring biometric Excel log parsing, flexitime tracking, dispute management, payroll processing, and Google Sheets sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
