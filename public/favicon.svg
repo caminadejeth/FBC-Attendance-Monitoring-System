@@ -1,18 +1,3 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <rect x="2" y="4" width="60" height="56" rx="10" fill="#fbbf24" stroke="#09090b" stroke-width="4"/>
-  
-  <!-- Top Checkerboard stripe -->
-  <rect x="6" y="8" width="52" height="6" fill="#09090b"/>
-  <rect x="6" y="8" width="6" height="6" fill="#fbbf24"/>
-  <rect x="18" y="8" width="6" height="6" fill="#fbbf24"/>
-  <rect x="30" y="8" width="6" height="6" fill="#fbbf24"/>
-  <rect x="42" y="8" width="6" height="6" fill="#fbbf24"/>
-  <rect x="52" y="8" width="6" height="6" fill="#fbbf24"/>
-
-  <!-- YELLOW CAB Text -->
-  <text x="32" y="32" font-family="Impact, Arial Black, sans-serif" font-weight="900" font-size="12" fill="#09090b" text-anchor="middle" letter-spacing="0.2">YELLOW CAB</text>
-  
-  <!-- PIZZA CO. Red Badge -->
-  <rect x="10" y="38" width="44" height="14" rx="4" fill="#e11d48" stroke="#09090b" stroke-width="1.5"/>
-  <text x="32" y="48.5" font-family="Arial, sans-serif" font-weight="bold" font-size="8.5" fill="#ffffff" text-anchor="middle">PIZZA CO.</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <text y=".9em" font-size="90">🍕</text>
 </svg>
