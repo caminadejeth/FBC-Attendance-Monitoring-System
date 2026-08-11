@@ -559,7 +559,7 @@ export default function App() {
       : currentUser?.role === 'SHIFT_MANAGER'
       ? `Shift Manager - ${currentUser.branch || 'YC Ebloc'}`
       : currentUser?.role === 'PAYROLL'
-      ? 'Payroll Specialist'
+      ? (currentUser.position || 'Payroll')
       : currentUser?.role === 'ADMIN'
       ? 'System Admin'
       : 'Approver';
@@ -677,10 +677,11 @@ export default function App() {
           icon: '🏪',
         };
       case 'PAYROLL':
+        const payrollPosUpper = (currentUser?.position || 'PAYROLL').toUpperCase();
         return {
-          title: 'PAYROLL SPECIALIST DTR & EXPORT DASHBOARD',
+          title: `${payrollPosUpper} DTR & EXPORT DASHBOARD`,
           subtitle: 'Biometric Attendance Logs • Employee DTR Records • Dispute Audits • Google Sheets Sync',
-          badge: 'ROLE: PAYROLL SPECIALIST',
+          badge: `POSITION: ${payrollPosUpper}`,
           icon: '💼',
         };
       case 'STAFF':

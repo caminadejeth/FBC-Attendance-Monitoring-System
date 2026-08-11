@@ -25,35 +25,36 @@ export const Header: React.FC<HeaderProps> = ({
   if (!currentUser) return null;
 
   const getRoleBadge = (role: UserRole) => {
+    const userPos = currentUser.position ? currentUser.position.toUpperCase() : null;
     switch (role) {
       case 'ADMIN':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-zinc-900 text-amber-400 border border-amber-400/40 shadow-xs">
-            <Shield className="w-3.5 h-3.5" /> OWNER / ADMIN
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-zinc-900 text-amber-400 border border-amber-400/40 shadow-xs uppercase">
+            <Shield className="w-3.5 h-3.5" /> {userPos || 'OWNER / ADMIN'}
           </span>
         );
       case 'SHIFT_MANAGER':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-400 text-zinc-950 border border-amber-500 shadow-xs">
-            <Shield className="w-3.5 h-3.5" /> SHIFT MANAGER
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-400 text-zinc-950 border border-amber-500 shadow-xs uppercase">
+            <Shield className="w-3.5 h-3.5" /> {userPos || 'SHIFT MANAGER'}
           </span>
         );
       case 'BRANCH_MANAGER':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-400 text-zinc-950 border border-amber-500 shadow-xs">
-            <Shield className="w-3.5 h-3.5" /> BRANCH MANAGER
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-400 text-zinc-950 border border-amber-500 shadow-xs uppercase">
+            <Shield className="w-3.5 h-3.5" /> {userPos || 'BRANCH MANAGER'}
           </span>
         );
       case 'PAYROLL':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-zinc-800 text-amber-300 border border-zinc-700">
-            <FileSpreadsheet className="w-3.5 h-3.5" /> PAYROLL SPECIALIST
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-zinc-800 text-amber-300 border border-zinc-700 uppercase">
+            <FileSpreadsheet className="w-3.5 h-3.5" /> {userPos || 'PAYROLL'}
           </span>
         );
       case 'STAFF':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-100 text-amber-900 border border-amber-300">
-            <UserCheck className="w-3.5 h-3.5" /> STAFF EMPLOYEE
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-amber-100 text-amber-900 border border-amber-300 uppercase">
+            <UserCheck className="w-3.5 h-3.5" /> {userPos || 'STAFF EMPLOYEE'}
           </span>
         );
     }

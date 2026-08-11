@@ -304,10 +304,24 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
   const payloadData = buildGoogleSheetsData(filteredSummaries, users, punches);
   const payrollItems = payloadData.payrollSummaries;
 
-  // Aggregate Total Payroll Hours Figures
-  const totalRegularHours = payrollItems.reduce((acc, p) => acc + p['Regular Hours'], 0);
-  const totalUndertimeHours = payrollItems.reduce((acc, p) => acc + p['Undertime Deficit Hours'], 0);
-  const totalDaysWorkedSum = payrollItems.reduce((acc, p) => acc + p['Days Worked'], 0);
+  // KPI Metrics
+  const totalMissingPunchesCount = filteredSummaries.filter((s) => {
+    if (s.status === 'ABSENT') return false;
+    const hasIn = Boolean(s.firstIn && s.firstIn !== '--:--' && s.firstIn !== 'MISSING');
+    const hasOut = Boolean(s.lastOut && s.lastOut !== '--:--' && s.lastOut !== 'MISSING');
+    return (
+      s.status === 'MISSING_IN' ||
+      s.status === 'MISSING_OUT' ||
+      s.status === 'LACKING' ||
+      !hasIn ||
+      !hasOut ||
+      (s.anomalies && s.anomalies.length > 0)
+    );
+  }).length;
+
+  const totalDisputesCount = (disputes || []).length;
+  const pendingDisputesCount = (disputes || []).filter((d) => d.status === 'PENDING').length;
+  const totalLogsCount = filteredSummaries.length;
 
   // Export Attendance Hours Summary File
   const handleExportPayslipSummary = () => {
@@ -444,25 +458,38 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
         </div>
       )}
 
-      {/* ATTENDANCE HOURS KPI OVERVIEW */}
+
+      {/* ATTENDANCE & TIME ADJUSTMENT KPI OVERVIEW */}
       {(activeTab === 'dtr-logs' || activeTab === 'daily-logs' || activeTab === 'overview' || activeTab === 'dashboard' || activeTab === 'all') && (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-          <div className="bg-white p-5 rounded-2xl border border-[#D3D8C8] shadow-xs">
-            <span className="text-xs font-bold text-[#656D4A] uppercase tracking-wider">Total Days Worked</span>
-            <div className="text-2xl font-black text-[#2C3524] mt-1">{totalDaysWorkedSum} Days</div>
-            <div className="text-[11px] text-gray-500 mt-1">Total Attendance Days</div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-white p-5 rounded-2xl border border-[#D3D8C8] shadow-xs flex items-center justify-between">
+            <div>
+              <span className="text-xs font-bold text-amber-700 uppercase tracking-wider flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> Total Missing Punches
+              </span>
+              <div className="text-2xl font-black text-amber-900 mt-1">{totalMissingPunchesCount}</div>
+              <div className="text-[11px] text-amber-700/80 mt-0.5">Missing clock-in or clock-out logs</div>
+            </div>
           </div>
 
-          <div className="bg-white p-5 rounded-2xl border border-[#D3D8C8] shadow-xs">
-            <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider">Total Regular Hours</span>
-            <div className="text-2xl font-black text-emerald-800 mt-1">{totalRegularHours.toFixed(1)} hrs</div>
-            <div className="text-[11px] text-emerald-600 mt-1">Net Regular Attendance Hours</div>
+          <div className="bg-white p-5 rounded-2xl border border-[#D3D8C8] shadow-xs flex items-center justify-between">
+            <div>
+              <span className="text-xs font-bold text-sky-800 uppercase tracking-wider flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-sky-600" /> Total Time Adjustments
+              </span>
+              <div className="text-2xl font-black text-sky-900 mt-1">{totalDisputesCount}</div>
+              <div className="text-[11px] text-sky-700/80 mt-0.5">{pendingDisputesCount} pending review</div>
+            </div>
           </div>
 
-          <div className="bg-white p-5 rounded-2xl border border-[#D3D8C8] shadow-xs">
-            <span className="text-xs font-bold text-amber-700 uppercase tracking-wider">Undertime Deficit Hours</span>
-            <div className="text-2xl font-black text-amber-800 mt-1">-{totalUndertimeHours.toFixed(1)} hrs</div>
-            <div className="text-[11px] text-amber-600 mt-1">Total Undertime Deficit Hours</div>
+          <div className="bg-white p-5 rounded-2xl border border-[#D3D8C8] shadow-xs flex items-center justify-between">
+            <div>
+              <span className="text-xs font-bold text-[#656D4A] uppercase tracking-wider flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-[#656D4A]" /> Total Attendance Logs
+              </span>
+              <div className="text-2xl font-black text-[#2C3524] mt-1">{totalLogsCount}</div>
+              <div className="text-[11px] text-gray-500 mt-0.5">Daily attendance summary records</div>
+            </div>
           </div>
         </div>
       )}

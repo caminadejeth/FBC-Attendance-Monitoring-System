@@ -103,35 +103,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const getRoleBadge = (role: UserRole) => {
+    const userPos = currentUser?.position || '';
     switch (role) {
       case 'ADMIN':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-zinc-950 uppercase tracking-wider">
-            <Shield className="w-3 h-3" /> Admin / Owner
+            <Shield className="w-3 h-3" /> {userPos || 'Admin / Owner'}
           </span>
         );
       case 'BRANCH_MANAGER':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-zinc-950 uppercase tracking-wider">
-            <Building2 className="w-3 h-3" /> Branch Manager
+            <Building2 className="w-3 h-3" /> {userPos || 'Branch Manager'}
           </span>
         );
       case 'SHIFT_MANAGER':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-zinc-950 uppercase tracking-wider">
-            <Building2 className="w-3 h-3" /> Shift Manager
+            <Building2 className="w-3 h-3" /> {userPos || 'Shift Manager'}
           </span>
         );
       case 'PAYROLL':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-zinc-800 text-amber-300 uppercase tracking-wider">
-            <FileSpreadsheet className="w-3 h-3" /> Payroll Specialist
+            <FileSpreadsheet className="w-3 h-3" /> {userPos || 'Payroll'}
           </span>
         );
       case 'STAFF':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-950 uppercase tracking-wider border border-amber-300">
-            <UserCheck className="w-3 h-3" /> Staff Employee
+            <UserCheck className="w-3 h-3" /> {userPos || 'Staff Employee'}
           </span>
         );
     }
