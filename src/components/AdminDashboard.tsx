@@ -56,6 +56,7 @@ import {
   User as UserIcon,
   CalendarDays,
   PlusCircle,
+  Trash2,
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -68,12 +69,15 @@ interface AdminDashboardProps {
   onSaveSchedule?: (schedule: WorkSchedule) => void;
   onUploadProcessed: (newSummaries: AttendanceSummaryDaily[]) => void;
   onUpdateSummaryAnomaly?: (summaryId: string, newNote: string) => void;
-  onApproveDispute: (disputeId: string, adminNotes: string) => void;
+  onApproveDispute: (disputeId: string, adminNotes: string, approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => void;
   onRejectDispute: (disputeId: string, adminNotes: string) => void;
   onSubmitDispute?: (dispute: Omit<DisputeRequest, 'id' | 'status' | 'submittedAt'>) => void;
   onAddUser: (user: User) => void;
   onUpdateUser: (user: User) => void;
   onDeleteUser?: (userId: string) => void;
+  onDeleteDispute?: (disputeId: string) => void;
+  onDeleteSummary?: (summaryId: string) => void;
+  onDeleteCtoRequest?: (ctoId: string) => void;
   onSyncGoogleSheets: () => void;
   activeTab: string;
 }
@@ -94,6 +98,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onAddUser,
   onUpdateUser,
   onDeleteUser,
+  onDeleteDispute,
+  onDeleteSummary,
+  onDeleteCtoRequest,
   onSyncGoogleSheets,
   activeTab,
 }) => {
@@ -194,6 +201,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         'Remark Saved & Reflected',
         `Anomalies/Note for ${s.employeeName} on ${formatDateMDYY(s.date)} has been updated.`
       );
+    }
+  };
+
+  const handleDeleteDisputeClick = async (dispute: DisputeRequest) => {
+    const result = await yellowCabSwal.fire({
+      title: 'Delete Dispute Record?',
+      html: `Are you sure you want to permanently delete the time adjustment/dispute ticket for <b>${dispute.employeeName}</b> on date <b>${dispute.date}</b>?`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#dc2626',
+      cancelButtonColor: '#6b7280',
+      confirmButtonText: 'Yes, Delete Record',
+      cancelButtonText: 'Cancel',
+    });
+    if (result.isConfirmed && onDeleteDispute) {
+      onDeleteDispute(dispute.id);
+      showSuccessAlert('Record Deleted', `Dispute ticket for ${dispute.employeeName} has been permanently removed.`);
+    }
+  };
+
+  const handleDeleteSummaryClick = async (s: AttendanceSummaryDaily) => {
+    const result = await yellowCabSwal.fire({
+      title: 'Delete Daily Attendance Record?',
+      html: `Are you sure you want to permanently delete the attendance record for <b>${s.employeeName}</b> on <b>${s.date}</b>?`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#dc2626',
+      cancelButtonColor: '#6b7280',
+      confirmButtonText: 'Yes, Delete Log',
+      cancelButtonText: 'Cancel',
+    });
+    if (result.isConfirmed && onDeleteSummary) {
+      onDeleteSummary(s.id);
+      showSuccessAlert('Record Deleted', `Daily attendance log for ${s.employeeName} on ${s.date} has been removed.`);
     }
   };
 
@@ -734,12 +775,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <th className="p-3 text-center">Total OT</th>
                   <th className="p-3">Remarks</th>
                   <th className="p-3 text-center">Status</th>
+                  <th className="p-3 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 font-medium">
                 {filteredSummaries.length === 0 ? (
                   <tr>
-                    <td colSpan={14} className="p-8 text-center text-gray-400">
+                    <td colSpan={15} className="p-8 text-center text-gray-400">
                       No matching attendance records found.
                     </td>
                   </tr>
@@ -856,6 +898,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-gray-100 text-gray-800 border border-gray-300">
                               {s.status}
                             </span>
+                          )}
+                        </td>
+                        <td className="p-3 text-center whitespace-nowrap">
+                          {onDeleteSummary && (
+                            <button
+                              id={`btn-delete-summary-${s.id}`}
+                              onClick={() => handleDeleteSummaryClick(s)}
+                              title="Delete record manually"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-bold transition-all cursor-pointer shadow-2xs"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" /> Delete
+                            </button>
                           )}
                         </td>
                       </tr>
@@ -997,17 +1051,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           {d.employeeId} • {d.branch || d.department || 'Branch'} • Target Date: {d.date}
                         </span>
                       </div>
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                          d.status === 'PENDING'
-                            ? 'bg-amber-200 text-amber-800'
-                            : d.status === 'APPROVED'
-                            ? 'bg-emerald-200 text-emerald-800'
-                            : 'bg-rose-200 text-rose-800'
-                        }`}
-                      >
-                        {d.status}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                            d.status === 'PENDING'
+                              ? 'bg-amber-200 text-amber-800'
+                              : d.status === 'APPROVED'
+                              ? 'bg-emerald-200 text-emerald-800'
+                              : 'bg-rose-200 text-rose-800'
+                          }`}
+                        >
+                          {d.status}
+                        </span>
+                        {onDeleteDispute && (
+                          <button
+                            id={`btn-delete-dispute-${d.id}`}
+                            onClick={() => handleDeleteDisputeClick(d)}
+                            title="Remove dispute record permanently"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 hover:bg-rose-200 text-rose-800 border border-rose-300 text-[10px] font-extrabold transition-all cursor-pointer shadow-2xs"
+                          >
+                            <Trash2 className="w-3 h-3" /> Remove
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <DisputeCardDetails dispute={d} />
@@ -1035,7 +1101,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={async () => {
                             const result = await showConfirmDisputeAction('APPROVE', d.employeeName, d.date);
                             if (result.isConfirmed) {
-                              onApproveDispute(d.id, result.value || 'Approved by Owner/Admin');
+                              onApproveDispute(d.id, result.value || 'Approved by Owner/Admin', 'ADMIN');
                               showSuccessAlert(
                                 'Dispute Approved!',
                                 `Attendance dispute for ${d.employeeName} on ${d.date} was approved and timecard recalculated.`
@@ -1044,7 +1110,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           }}
                           className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#656D4A] hover:bg-[#4A543E] text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
                         >
-                          <Check className="w-3.5 h-3.5" /> Approve Adjustment
+                          <Check className="w-3.5 h-3.5" /> Approve Adjustment (Admin)
                         </button>
                       </div>
                     )}

@@ -179,7 +179,7 @@ export default function App() {
     } else if (user.role === 'BRANCH_MANAGER') {
       setActiveTab('dtr-logs');
     } else if (user.role === 'PAYROLL') {
-      setActiveTab('payroll-summary');
+      setActiveTab('dtr-logs');
     } else {
       setActiveTab('my-punches');
     }
@@ -201,35 +201,80 @@ export default function App() {
     });
   };
 
-  // Handle Dispute Approvals & Hours Recalculation
-  const handleApproveDispute = (disputeId: string, adminNotes: string) => {
+  // Handle Dispute Approvals & Hours Recalculation (Dual Approval)
+  const handleApproveDispute = (
+    disputeId: string,
+    adminNotes: string,
+    approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN'
+  ) => {
     const currentNow = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const role =
+      approverRole ||
+      (currentUser?.role === 'BRANCH_MANAGER' || currentUser?.role === 'SHIFT_MANAGER'
+        ? 'MANAGER'
+        : 'PAYROLL');
 
+    let isFullyApproved = false;
+    let targetDisputeToProcess: DisputeRequest | null = null;
     let updatedDisputeItem: DisputeRequest | null = null;
+
     setDisputes((prev) =>
       prev.map((d) => {
-        if (d.id === disputeId) {
-          const item: DisputeRequest = {
-            ...d,
-            status: 'APPROVED',
-            adminNotes,
-            reviewedBy: currentUser?.name || 'Branch Manager / Admin',
-            reviewedAt: currentNow,
-            approvedAt: currentNow,
-          };
-          updatedDisputeItem = item;
-          return item;
+        if (d.id !== disputeId) return d;
+
+        const isMgr = role === 'MANAGER';
+        const isPay = role === 'PAYROLL' || role === 'ADMIN';
+
+        const updatedMgrApp = isMgr ? true : Boolean(d.managerApproved);
+        const updatedMgrBy = isMgr
+          ? currentUser?.name || 'Branch Manager'
+          : d.managerApprovedBy || (d.status === 'APPROVED' ? d.reviewedBy : undefined);
+        const updatedMgrAt = isMgr ? currentNow : d.managerApprovedAt;
+
+        const updatedPayApp = isPay ? true : Boolean(d.payrollApproved);
+        const updatedPayBy = isPay
+          ? currentUser?.name || 'Payroll Department'
+          : d.payrollApprovedBy;
+        const updatedPayAt = isPay ? currentNow : d.payrollApprovedAt;
+
+        // Fully approved if both approved, OR if done by ADMIN
+        const fullyApproved = (updatedMgrApp && updatedPayApp) || (isPay && role === 'ADMIN');
+        if (fullyApproved) {
+          isFullyApproved = true;
         }
-        return d;
+
+        const approvers: string[] = [];
+        if (updatedMgrApp) approvers.push(`Branch Manager (${updatedMgrBy || 'Manager'})`);
+        if (updatedPayApp) approvers.push(`Payroll (${updatedPayBy || 'Payroll'})`);
+
+        const item: DisputeRequest = {
+          ...d,
+          status: fullyApproved ? 'APPROVED' : 'PENDING',
+          adminNotes: adminNotes || d.adminNotes,
+          reviewedBy: approvers.join(' & ') || currentUser?.name || 'Authorized Approver',
+          reviewedAt: currentNow,
+          approvedAt: fullyApproved ? currentNow : d.approvedAt,
+          managerApproved: updatedMgrApp,
+          managerApprovedBy: updatedMgrBy,
+          managerApprovedAt: updatedMgrAt,
+          payrollApproved: updatedPayApp,
+          payrollApprovedBy: updatedPayBy,
+          payrollApprovedAt: updatedPayAt,
+        };
+
+        targetDisputeToProcess = item;
+        updatedDisputeItem = item;
+        return item;
       })
     );
+
     if (updatedDisputeItem) {
       saveDocument('disputes', updatedDisputeItem);
     }
 
-    // Find the dispute to adjust the daily summary record
-    const targetDispute = disputes.find((d) => d.id === disputeId);
-    if (targetDispute) {
+    // Recalculate DTR Attendance summary ONLY when fully approved by BOTH or ADMIN
+    if (isFullyApproved && targetDisputeToProcess) {
+      const targetDispute: DisputeRequest = targetDisputeToProcess;
       const empUser = users.find((u) => u.employeeId === targetDispute.employeeId);
       const empName = targetDispute.employeeName || empUser?.name || 'Staff Member';
       const dept = empUser?.department || 'Operations';
@@ -574,6 +619,21 @@ export default function App() {
     setUsers((prev) => prev.filter((u) => u.id !== userId));
   };
 
+  const handleDeleteDispute = (disputeId: string) => {
+    removeDocument('disputes', disputeId);
+    setDisputes((prev) => prev.filter((d) => d.id !== disputeId));
+  };
+
+  const handleDeleteSummary = (summaryId: string) => {
+    removeDocument('summaries', summaryId);
+    setSummaries((prev) => prev.filter((s) => s.id !== summaryId));
+  };
+
+  const handleDeleteCtoRequest = (ctoId: string) => {
+    removeDocument('ctoRequests', ctoId);
+    setCtoRequests((prev) => prev.filter((c) => c.id !== ctoId));
+  };
+
   // Handle Google Sheets Sync Trigger
   const handleSyncGoogleSheets = async () => {
     const confirm = await showSyncConfirmAlert();
@@ -618,10 +678,10 @@ export default function App() {
         };
       case 'PAYROLL':
         return {
-          title: 'PAYROLL SPECIALIST CALCULATOR & EXPORT DASHBOARD',
-          subtitle: 'Regular & OT Wages • Night Differential • Deduction Mapping • Google Sheets Sync',
+          title: 'PAYROLL SPECIALIST DTR & EXPORT DASHBOARD',
+          subtitle: 'Biometric Attendance Logs • Employee DTR Records • Dispute Audits • Google Sheets Sync',
           badge: 'ROLE: PAYROLL SPECIALIST',
-          icon: '🧮',
+          icon: '💼',
         };
       case 'STAFF':
         return {
@@ -639,7 +699,7 @@ export default function App() {
     activeTab === 'dashboard' ||
     (currentUser?.role === 'ADMIN' && (activeTab === 'overview' || activeTab === 'logs')) ||
     ((currentUser?.role === 'BRANCH_MANAGER' || currentUser?.role === 'SHIFT_MANAGER') && activeTab === 'branch-logs') ||
-    (currentUser?.role === 'PAYROLL' && activeTab === 'payroll-summary') ||
+    (currentUser?.role === 'PAYROLL' && (activeTab === 'dtr-logs' || activeTab === 'daily-logs')) ||
     (currentUser?.role === 'STAFF' && activeTab === 'my-punches');
 
   return (
@@ -722,6 +782,9 @@ export default function App() {
                 onAddUser={handleAddUser}
                 onUpdateUser={handleUpdateUser}
                 onDeleteUser={handleDeleteUser}
+                onDeleteDispute={handleDeleteDispute}
+                onDeleteSummary={handleDeleteSummary}
+                onDeleteCtoRequest={handleDeleteCtoRequest}
                 onSyncGoogleSheets={handleSyncGoogleSheets}
                 activeTab={activeTab}
               />

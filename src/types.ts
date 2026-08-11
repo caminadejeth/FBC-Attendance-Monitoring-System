@@ -157,6 +157,12 @@ export interface DisputeRequest {
   reviewedBy?: string;
   reviewedAt?: string;
   approvedAt?: string;
+  managerApproved?: boolean;
+  managerApprovedBy?: string;
+  managerApprovedAt?: string;
+  payrollApproved?: boolean;
+  payrollApprovedBy?: string;
+  payrollApprovedAt?: string;
 }
 
 export interface PayrollPeriodSummary {

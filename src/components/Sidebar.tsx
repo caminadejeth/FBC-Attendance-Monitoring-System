@@ -125,7 +125,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       case 'PAYROLL':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-zinc-800 text-amber-300 uppercase tracking-wider">
-            <Calculator className="w-3 h-3" /> Payroll Specialist
+            <FileSpreadsheet className="w-3 h-3" /> Payroll Specialist
           </span>
         );
       case 'STAFF':
@@ -251,17 +251,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
       case 'PAYROLL':
         return [
           {
-            id: 'payroll-summary',
-            label: 'Payroll Attendance Calculation',
-            icon: Calculator,
-            description: 'Employee DTR hours summary',
-          },
-          {
             id: 'dtr-logs',
             label: 'Employee DTR Logs',
             icon: Clock,
             description: 'Daily Time Record DTR form & logs',
             highlight: true,
+          },
+          {
+            id: 'daily-logs',
+            label: 'Daily Attendance Logs',
+            icon: FileText,
+            description: 'Uploaded biometric daily records',
           },
           {
             id: 'schedules',

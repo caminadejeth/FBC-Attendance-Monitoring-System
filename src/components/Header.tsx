@@ -47,7 +47,7 @@ export const Header: React.FC<HeaderProps> = ({
       case 'PAYROLL':
         return (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-zinc-800 text-amber-300 border border-zinc-700">
-            <Calculator className="w-3.5 h-3.5" /> PAYROLL SPECIALIST
+            <FileSpreadsheet className="w-3.5 h-3.5" /> PAYROLL SPECIALIST
           </span>
         );
       case 'STAFF':

@@ -97,19 +97,25 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
         </div>
 
         {dispute.status === 'APPROVED' && (
-          <div className="bg-emerald-50 border border-emerald-300 rounded-lg p-2.5 text-emerald-950 space-y-1">
+          <div className="bg-emerald-50 border border-emerald-300 rounded-lg p-2.5 text-emerald-950 space-y-1.5">
             <div className="flex items-center justify-between font-bold text-xs text-emerald-900 flex-wrap gap-1">
               <span className="flex items-center gap-1 text-emerald-900">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                Approved by Branch Manager
+                Dual Approval Completed (Manager & Payroll)
               </span>
               <span className="font-mono text-[10px] bg-emerald-200/90 text-emerald-950 px-2 py-0.5 rounded font-black border border-emerald-400">
-                Approved: {approvalDate || dispute.submittedAt}
+                Fully Approved: {approvalDate || dispute.submittedAt}
               </span>
             </div>
-            <div className="text-[11px] font-semibold text-emerald-850 flex items-center gap-1.5 pt-0.5">
-              <UserCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-              <span>Approver: <strong className="text-emerald-950">{dispute.reviewedBy || 'Branch Manager'}</strong></span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] pt-1">
+              <div className="bg-white/80 p-1.5 rounded border border-emerald-200 flex items-center gap-1.5">
+                <UserCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                <span>Branch Mgr: <strong className="text-emerald-950">{dispute.managerApprovedBy || dispute.reviewedBy || 'Manager'}</strong></span>
+              </div>
+              <div className="bg-white/80 p-1.5 rounded border border-emerald-200 flex items-center gap-1.5">
+                <UserCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                <span>Payroll: <strong className="text-emerald-950">{dispute.payrollApprovedBy || dispute.reviewedBy || 'Payroll'}</strong></span>
+              </div>
             </div>
             {dispute.adminNotes && (
               <p className="text-[11px] text-emerald-900 italic bg-white/70 p-1.5 rounded border border-emerald-200 mt-1">
@@ -124,7 +130,7 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
             <div className="flex items-center justify-between font-bold text-xs text-rose-900 flex-wrap gap-1">
               <span className="flex items-center gap-1 text-rose-900">
                 <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                Rejected by Branch Manager / Admin
+                Adjustment Rejected
               </span>
               <span className="font-mono text-[10px] bg-rose-200 text-rose-950 px-2 py-0.5 rounded font-black border border-rose-400">
                 Rejected: {dispute.reviewedAt || dispute.submittedAt}
@@ -132,7 +138,7 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
             </div>
             <div className="text-[11px] font-semibold text-rose-850 flex items-center gap-1.5 pt-0.5">
               <UserCheck className="w-3.5 h-3.5 text-rose-700 shrink-0" />
-              <span>Reviewed By: <strong className="text-rose-950">{dispute.reviewedBy || 'Branch Manager'}</strong></span>
+              <span>Reviewed By: <strong className="text-rose-950">{dispute.reviewedBy || 'Manager / Payroll'}</strong></span>
             </div>
             {dispute.adminNotes && (
               <p className="text-[11px] text-rose-900 italic bg-white/70 p-1.5 rounded border border-rose-200 mt-1">
@@ -143,14 +149,62 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
         )}
 
         {dispute.status === 'PENDING' && (
-          <div className="bg-amber-50 border border-amber-300 rounded-lg p-2.5 text-amber-950 flex items-center justify-between font-bold text-xs flex-wrap gap-1">
-            <span className="flex items-center gap-1.5 text-amber-900">
-              <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-              Pending Branch Manager / Admin Approval
-            </span>
-            <span className="font-mono text-[10px] bg-amber-200/80 px-2 py-0.5 rounded text-amber-950 border border-amber-400 font-bold">
-              Submitted: {dispute.submittedAt}
-            </span>
+          <div className="bg-amber-50 border border-amber-300 rounded-lg p-2.5 text-amber-950 space-y-2">
+            <div className="flex items-center justify-between font-bold text-xs flex-wrap gap-1">
+              <span className="flex items-center gap-1.5 text-amber-900">
+                <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                Dual Approval Status
+              </span>
+              <span className="font-mono text-[10px] bg-amber-200/80 px-2 py-0.5 rounded text-amber-950 border border-amber-400 font-bold">
+                Submitted: {dispute.submittedAt}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+              <div
+                className={`p-1.5 rounded border flex items-center justify-between gap-1.5 ${
+                  dispute.managerApproved
+                    ? 'bg-emerald-100/80 border-emerald-300 text-emerald-950 font-bold'
+                    : 'bg-white/80 border-amber-200 text-amber-900'
+                }`}
+              >
+                <span className="flex items-center gap-1">
+                  {dispute.managerApproved ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  ) : (
+                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  )}
+                  Branch Manager
+                </span>
+                <span className="text-[10px]">
+                  {dispute.managerApproved
+                    ? `Approved (${dispute.managerApprovedBy || 'Manager'})`
+                    : 'Pending'}
+                </span>
+              </div>
+
+              <div
+                className={`p-1.5 rounded border flex items-center justify-between gap-1.5 ${
+                  dispute.payrollApproved
+                    ? 'bg-emerald-100/80 border-emerald-300 text-emerald-950 font-bold'
+                    : 'bg-white/80 border-amber-200 text-amber-900'
+                }`}
+              >
+                <span className="flex items-center gap-1">
+                  {dispute.payrollApproved ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  ) : (
+                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  )}
+                  Payroll Department
+                </span>
+                <span className="text-[10px]">
+                  {dispute.payrollApproved
+                    ? `Approved (${dispute.payrollApprovedBy || 'Payroll'})`
+                    : 'Pending'}
+                </span>
+              </div>
+            </div>
           </div>
         )}
       </div>

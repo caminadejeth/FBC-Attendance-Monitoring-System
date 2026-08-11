@@ -65,7 +65,7 @@ interface PayrollDashboardProps {
   onSaveSchedule?: (schedule: WorkSchedule) => void;
   onUploadProcessed?: (newSummaries: AttendanceSummaryDaily[]) => void;
   onUpdateSummaryAnomaly?: (summaryId: string, newNote: string) => void;
-  onApproveDispute?: (id: string, notes?: string) => void;
+  onApproveDispute?: (id: string, notes?: string, role?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => void;
   onRejectDispute?: (id: string, notes?: string) => void;
   onSubmitDispute?: (dispute: Omit<DisputeRequest, 'id' | 'status' | 'submittedAt'>) => void;
   onApproveCtoRequest: (id: string, notes?: string) => void;
@@ -362,7 +362,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-4">
             <div>
               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">
-                <Calculator className="w-3.5 h-3.5 text-amber-800" /> Payroll Biometric Data Ingestion
+                <Upload className="w-3.5 h-3.5 text-amber-800" /> Payroll Biometric Data Ingestion
               </span>
               <h2 className="text-lg font-bold text-[#2C3524] mt-1">
                 Upload ZKTeco Biometric Excel Logs (.xls / .xlsx)
@@ -444,8 +444,8 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
         </div>
       )}
 
-      {/* ATTENDANCE HOURS KPI OVERVIEW - Strictly shown on Payroll Summary / Overview */}
-      {(activeTab === 'payroll-summary' || activeTab === 'overview' || activeTab === 'dashboard' || activeTab === 'all') && (
+      {/* ATTENDANCE HOURS KPI OVERVIEW */}
+      {(activeTab === 'dtr-logs' || activeTab === 'daily-logs' || activeTab === 'overview' || activeTab === 'dashboard' || activeTab === 'all') && (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-[#D3D8C8] shadow-xs">
             <span className="text-xs font-bold text-[#656D4A] uppercase tracking-wider">Total Days Worked</span>
@@ -815,117 +815,8 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
         );
       })()}
 
-      {/* CALCULATED PAYROLL TABLE */}
-      {(activeTab === 'payroll-summary' || activeTab === 'all') && (() => {
-        const totalPayrollPages = payrollItemsPerPage === -1 ? 1 : Math.ceil(payrollItems.length / (payrollItemsPerPage || 25));
-        const currentPayrollPage = Math.min(payrollPage, totalPayrollPages || 1);
-        const paginatedPayrollItems = payrollItemsPerPage === -1
-          ? payrollItems
-          : payrollItems.slice((currentPayrollPage - 1) * payrollItemsPerPage, currentPayrollPage * payrollItemsPerPage);
-
-        return (
-          <div className="bg-white rounded-2xl border border-[#D3D8C8] p-4 sm:p-5 shadow-xs space-y-3">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-gray-100 pb-3">
-              <div>
-                <h2 className="text-base font-bold text-[#2C3524] flex items-center gap-2">
-                  <Calculator className="w-4 h-4 text-[#656D4A]" />
-                  Payslip-Ready Payroll Hours & Deductions Breakdown
-                </h2>
-                <p className="text-xs text-gray-500">
-                  Calculated based on 8-hour Flexitime target (with 1.0 hr automatic break deduction) and undertime deficit deductions.
-                </p>
-              </div>
-
-              {/* Page Limiter Dropdown & Navigation */}
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="font-bold text-gray-600">Rows per page:</span>
-                <select
-                  value={payrollItemsPerPage}
-                  onChange={(e) => {
-                    setPayrollItemsPerPage(Number(e.target.value));
-                    setPayrollPage(1);
-                  }}
-                  className="bg-white border border-gray-300 rounded-lg px-2 py-1 font-mono font-bold text-gray-800 shadow-2xs focus:ring-1 focus:ring-amber-500 cursor-pointer"
-                >
-                  <option value={10}>10 rows</option>
-                  <option value={25}>25 rows</option>
-                  <option value={50}>50 rows</option>
-                  <option value={100}>100 rows</option>
-                  <option value={-1}>Show All ({payrollItems.length})</option>
-                </select>
-
-                <span className="font-mono text-gray-500 text-[11px] bg-gray-50 px-2 py-1 rounded border border-gray-200">
-                  {payrollItems.length === 0 ? 0 : (currentPayrollPage - 1) * (payrollItemsPerPage === -1 ? payrollItems.length : payrollItemsPerPage) + 1}-
-                  {payrollItemsPerPage === -1 ? payrollItems.length : Math.min(currentPayrollPage * payrollItemsPerPage, payrollItems.length)} of {payrollItems.length}
-                </span>
-
-                {payrollItemsPerPage !== -1 && totalPayrollPages > 1 && (
-                  <div className="flex items-center gap-1 font-mono">
-                    <button
-                      disabled={currentPayrollPage <= 1}
-                      onClick={() => setPayrollPage((p) => Math.max(1, p - 1))}
-                      className="px-2 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-100 disabled:opacity-40 font-bold transition-colors cursor-pointer"
-                    >
-                      ‹
-                    </button>
-                    <span className="px-2 py-1 bg-gray-50 border border-gray-200 rounded-lg font-bold text-[#2C3524]">
-                      {currentPayrollPage}/{totalPayrollPages}
-                    </span>
-                    <button
-                      disabled={currentPayrollPage >= totalPayrollPages}
-                      onClick={() => setPayrollPage((p) => Math.min(totalPayrollPages, p + 1))}
-                      className="px-2 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-100 disabled:opacity-40 font-bold transition-colors cursor-pointer"
-                    >
-                      ›
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="overflow-x-auto border border-gray-200 rounded-xl shadow-2xs">
-              <table className="w-full text-left text-xs min-w-[600px]">
-                <thead className="bg-[#F7F8F5] text-[#4A543E] font-bold uppercase tracking-wider border-b border-gray-200 text-[11px]">
-                  <tr>
-                    <th className="px-3 py-2">Employee</th>
-                    <th className="px-3 py-2">Department</th>
-                    <th className="px-3 py-2">Days Worked</th>
-                    <th className="px-3 py-2">Regular Hrs</th>
-                    <th className="px-3 py-2">UT Deficit Hrs</th>
-                    <th className="px-3 py-2">Overtime Hrs</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 font-medium">
-                  {paginatedPayrollItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="p-8 text-center text-gray-400">
-                        No attendance data matching the selected date range and filter.
-                      </td>
-                    </tr>
-                  ) : (
-                    paginatedPayrollItems.map((p) => (
-                      <tr key={p['Employee ID']} className="hover:bg-amber-50/40 transition-colors">
-                        <td className="px-3 py-2">
-                          <div className="font-bold text-[#2C3524] text-xs">{p['Employee Name']}</div>
-                          <div className="text-[10px] text-gray-400 font-mono">{p['Employee ID']}</div>
-                        </td>
-                        <td className="px-3 py-2 text-gray-700">{p['Department']}</td>
-                        <td className="px-3 py-2 font-bold text-gray-700">{p['Days Worked']} Days</td>
-                        <td className="px-3 py-2 font-bold text-gray-800">{p['Regular Hours']} hrs</td>
-                        <td className="px-3 py-2 font-bold text-amber-700">-{p['Undertime Deficit Hours']} hrs</td>
-                        <td className="px-3 py-2 font-bold text-sky-800">+{p['Overtime Hours']} hrs</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
-      })()}
-
       {/* COMPENSATORY TIME OFF (CTO) MANAGEMENT SECTION */}
-      {(activeTab === 'cto-management' || activeTab === 'all' || activeTab === 'payroll-summary') && (
+      {(activeTab === 'cto-management' || activeTab === 'all') && (
         <div id="cto-management-section" className="space-y-6">
           {/* Header & Pending Alert */}
           <div className="bg-gradient-to-r from-amber-500 via-amber-600 to-amber-700 rounded-2xl border-2 border-zinc-950 p-6 text-white shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
@@ -1492,39 +1383,55 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                     {/* Full Card Details including Proof Attachment & Manager Approval Timestamp */}
                     <DisputeCardDetails dispute={d} />
 
-                    {/* Action buttons if Payroll / Admin wants to override or approve */}
+                    {/* Action buttons if Payroll / Admin wants to approve */}
                     {d.status === 'PENDING' && onApproveDispute && onRejectDispute && (
                       <div className="flex items-center justify-end gap-2 pt-2 border-t border-amber-300/60">
-                        <button
-                          onClick={async () => {
-                            const result = await showConfirmDisputeAction('REJECT', d.employeeName, d.date);
-                            if (result.isConfirmed) {
-                              onRejectDispute(d.id, result.value || 'Rejected by Payroll');
-                              showSuccessAlert(
-                                'Dispute Rejected',
-                                `Time adjustment request for ${d.employeeName} on ${d.date} was rejected.`
-                              );
-                            }
-                          }}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs font-bold transition-all cursor-pointer shadow-2xs"
-                        >
-                          <X className="w-3.5 h-3.5" /> Reject
-                        </button>
-                        <button
-                          onClick={async () => {
-                            const result = await showConfirmDisputeAction('APPROVE', d.employeeName, d.date);
-                            if (result.isConfirmed) {
-                              onApproveDispute(d.id, result.value || 'Approved by Payroll Department');
-                              showSuccessAlert(
-                                'Time Adjustment Approved!',
-                                `Time adjustment for ${d.employeeName} on ${d.date} was approved and DTR record updated.`
-                              );
-                            }
-                          }}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
-                        >
-                          <Check className="w-3.5 h-3.5" /> Approve Adjustment
-                        </button>
+                        {d.payrollApproved ? (
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold shadow-2xs">
+                            <Check className="w-4 h-4 text-emerald-600" />
+                            Payroll Signed Off (Awaiting Manager)
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              onClick={async () => {
+                                const result = await showConfirmDisputeAction('REJECT', d.employeeName, d.date);
+                                if (result.isConfirmed) {
+                                  onRejectDispute(d.id, result.value || 'Rejected by Payroll');
+                                  showSuccessAlert(
+                                    'Dispute Rejected',
+                                    `Time adjustment request for ${d.employeeName} on ${d.date} was rejected.`
+                                  );
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs font-bold transition-all cursor-pointer shadow-2xs"
+                            >
+                              <X className="w-3.5 h-3.5" /> Reject
+                            </button>
+                            <button
+                              onClick={async () => {
+                                const result = await showConfirmDisputeAction('APPROVE', d.employeeName, d.date);
+                                if (result.isConfirmed) {
+                                  onApproveDispute(d.id, result.value || 'Approved by Payroll Department', 'PAYROLL');
+                                  if (d.managerApproved) {
+                                    showSuccessAlert(
+                                      'Time Adjustment Fully Approved!',
+                                      `Dual approval complete (Branch Manager & Payroll). Time adjustment for ${d.employeeName} on ${d.date} has updated the DTR.`
+                                    );
+                                  } else {
+                                    showSuccessAlert(
+                                      'Payroll Approval Recorded!',
+                                      `Payroll approval logged for ${d.employeeName} on ${d.date}. Pending Branch Manager sign-off.`
+                                    );
+                                  }
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
+                            >
+                              <Check className="w-3.5 h-3.5" /> Approve (Payroll Dept)
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>

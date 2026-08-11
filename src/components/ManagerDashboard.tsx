@@ -72,7 +72,7 @@ interface ManagerDashboardProps {
   onSaveSchedule?: (schedule: WorkSchedule) => void;
   onUploadProcessed: (newSummaries: AttendanceSummaryDaily[]) => void;
   onUpdateSummaryAnomaly?: (summaryId: string, newNote: string) => void;
-  onApproveDispute?: (id: string, notes?: string) => void;
+  onApproveDispute?: (id: string, notes?: string, role?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => void;
   onRejectDispute?: (id: string, notes?: string) => void;
   onSubmitDispute: (dispute: Omit<DisputeRequest, 'id' | 'status' | 'submittedAt'>) => void;
   onSubmitCtoRequest: (req: Omit<CtoRequest, 'id' | 'status' | 'submittedAt'>) => void;
@@ -580,39 +580,50 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
                       {d.status === 'PENDING' && onApproveDispute && onRejectDispute && (
                         <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0">
-                          <button
-                            onClick={async () => {
-                              const noteRes = await showRemarkPromptAlert(
-                                d.employeeName,
-                                formatDateMDYYYY(d.date),
-                                d.reason
-                              );
-                              const reviewNotes = noteRes.isConfirmed ? noteRes.value : d.reason;
-                              onApproveDispute(d.id, reviewNotes);
-                              showSuccessAlert(
-                                'Time Adjustment Approved!',
-                                `Approved adjustment for ${d.employeeName} on ${formatDateMDYYYY(d.date)}. The reason "${reviewNotes || d.reason}" has been reflected on the Note/Anomaly column.`
-                              );
-                            }}
-                            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-2xs cursor-pointer"
-                          >
-                            <Check className="w-4 h-4" /> Approve Adjustment
-                          </button>
+                          {d.managerApproved ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold shadow-2xs">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                              Manager Signed Off (Awaiting Payroll)
+                            </span>
+                          ) : (
+                            <>
+                              <button
+                                onClick={async () => {
+                                  const noteRes = await showRemarkPromptAlert(
+                                    d.employeeName,
+                                    formatDateMDYYYY(d.date),
+                                    d.reason
+                                  );
+                                  const reviewNotes = noteRes.isConfirmed ? noteRes.value : d.reason;
+                                  onApproveDispute(d.id, reviewNotes, 'MANAGER');
+                                  showSuccessAlert(
+                                    'Branch Manager Approval Recorded!',
+                                    `Approved adjustment for ${d.employeeName} on ${formatDateMDYYYY(d.date)}. Request forwarded to Payroll Department for final sign-off.`
+                                  );
+                                }}
+                                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                              >
+                                <Check className="w-4 h-4" /> Approve (Branch Manager)
+                              </button>
 
-                          <button
-                            onClick={async () => {
-                              const noteRes = await showRemarkPromptAlert(
-                                d.employeeName,
-                                formatDateMDYYYY(d.date),
-                                'Reason for rejection'
-                              );
-                              const reviewNotes = noteRes.isConfirmed ? noteRes.value : 'Request rejected by Manager';
-                              onRejectDispute(d.id, reviewNotes);
-                            }}
-                            className="px-3 py-2 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-800 text-xs font-bold flex items-center gap-1 cursor-pointer"
-                          >
-                            <X className="w-4 h-4" /> Reject
-                          </button>
+                              <button
+                                onClick={async () => {
+                                  const noteRes = await showRemarkPromptAlert(
+                                    d.employeeName,
+                                    formatDateMDYYYY(d.date),
+                                    'Reason for rejection'
+                                  );
+                                  const reviewNotes = noteRes.isConfirmed
+                                    ? noteRes.value
+                                    : 'Request rejected by Branch Manager';
+                                  onRejectDispute(d.id, reviewNotes);
+                                }}
+                                className="px-3 py-2 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-800 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                              >
+                                <X className="w-4 h-4" /> Reject
+                              </button>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
