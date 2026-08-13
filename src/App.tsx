@@ -234,8 +234,8 @@ export default function App() {
   };
 
   // Handle uploaded biometric file processing
-  const handleUploadProcessed = (newSummaries: AttendanceSummaryDaily[]) => {
-    saveDocuments('summaries', newSummaries);
+  const handleUploadProcessed = async (newSummaries: AttendanceSummaryDaily[]) => {
+    await saveDocuments('summaries', newSummaries);
     logActivity('BIOMETRIC_UPLOAD', `Uploaded and processed ${newSummaries.length} biometric attendance summary logs.`, 'Biometrics');
     setSummaries((prev) => {
       const map = new Map<string, AttendanceSummaryDaily>();

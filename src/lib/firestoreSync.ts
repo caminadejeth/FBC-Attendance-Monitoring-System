@@ -1,4 +1,4 @@
-import { db, collection, onSnapshot, doc, getDoc, setDoc, deleteDoc } from './firebase';
+import { db, collection, onSnapshot, doc, getDoc, setDoc, deleteDoc, writeBatch } from './firebase';
 
 const getStorageKey = (colName: string) => {
   if (colName === 'ctoRequests') return 'fbc_cto_requests';
@@ -88,6 +88,36 @@ export function recordDeletedId(colName: string, id: string) {
   }
 }
 
+export function unmarkDeletedId(colName: string, id: string) {
+  try {
+    const deletedSet = getDeletedIds(colName);
+    if (deletedSet.has(id)) {
+      deletedSet.delete(id);
+      localStorage.setItem(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)));
+    }
+  } catch (e) {
+    console.error(`Failed unmarking deleted ID for ${colName}`, e);
+  }
+}
+
+export function unmarkDeletedIds(colName: string, ids: string[]) {
+  try {
+    const deletedSet = getDeletedIds(colName);
+    let changed = false;
+    for (const id of ids) {
+      if (deletedSet.has(id)) {
+        deletedSet.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) {
+      localStorage.setItem(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)));
+    }
+  } catch (e) {
+    console.error(`Failed unmarking deleted IDs for ${colName}`, e);
+  }
+}
+
 export function subscribeCollection<T extends { id: string }>(
   collectionName: string,
   initialData: T[],
@@ -125,13 +155,7 @@ export function subscribeCollection<T extends { id: string }>(
               await markCloudInitialized();
               onUpdate(sorted);
               // Seed cached items to firestore so cloud is populated
-              for (const item of sorted) {
-                try {
-                  await setDoc(doc(db, collectionName, item.id), cleanUndefined(item), { merge: true });
-                } catch (e) {
-                  console.error(`Error syncing cached item to ${collectionName}:`, e);
-                }
-              }
+              await saveDocuments(collectionName, sorted);
               return;
             }
           } catch (e) {
@@ -146,13 +170,7 @@ export function subscribeCollection<T extends { id: string }>(
         if (sortedInitial.length > 0) {
           localStorage.setItem(seededKey, 'true');
           await markCloudInitialized();
-          for (const item of sortedInitial) {
-            try {
-              await setDoc(doc(db, collectionName, item.id), cleanUndefined(item), { merge: true });
-            } catch (e) {
-              console.error(`Error seeding ${collectionName}:`, e);
-            }
-          }
+          await saveDocuments(collectionName, sortedInitial);
           try {
             localStorage.setItem(storageKey, JSON.stringify(sortedInitial));
           } catch (e) {
@@ -227,6 +245,7 @@ export async function saveDocument<T extends { id: string }>(
   collectionName: string,
   item: T
 ) {
+  unmarkDeletedId(collectionName, item.id);
   try {
     const cleanedItem = cleanUndefined(item);
     await setDoc(doc(db, collectionName, item.id), cleanedItem, { merge: true });
@@ -239,8 +258,29 @@ export async function saveDocuments<T extends { id: string }>(
   collectionName: string,
   items: T[]
 ) {
-  for (const item of items) {
-    await saveDocument(collectionName, item);
+  if (!items || items.length === 0) return;
+
+  const ids = items.map((i) => i.id);
+  unmarkDeletedIds(collectionName, ids);
+
+  const BATCH_SIZE = 400; // Firestore limit is 500
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const chunk = items.slice(i, i + BATCH_SIZE);
+    try {
+      const batch = writeBatch(db);
+      for (const item of chunk) {
+        const cleanedItem = cleanUndefined(item);
+        const ref = doc(db, collectionName, item.id);
+        batch.set(ref, cleanedItem, { merge: true });
+      }
+      await batch.commit();
+    } catch (e) {
+      console.error(`Error in batch saving to ${collectionName}:`, e);
+      // Fallback to individual setDoc calls if batch fails
+      for (const item of chunk) {
+        await saveDocument(collectionName, item);
+      }
+    }
   }
 }
 
@@ -266,3 +306,4 @@ export async function removeDocument(collectionName: string, id: string) {
     console.error(`Error deleting from ${collectionName}:`, error);
   }
 }
+
