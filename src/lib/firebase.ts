@@ -4,6 +4,7 @@ import {
   collection,
   onSnapshot,
   doc,
+  getDoc,
   setDoc,
   deleteDoc,
   writeBatch
@@ -20,6 +21,7 @@ export {
   collection,
   onSnapshot,
   doc,
+  getDoc,
   setDoc,
   deleteDoc,
   writeBatch

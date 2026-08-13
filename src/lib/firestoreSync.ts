@@ -1,4 +1,4 @@
-import { db, collection, onSnapshot, doc, setDoc, deleteDoc } from './firebase';
+import { db, collection, onSnapshot, doc, getDoc, setDoc, deleteDoc } from './firebase';
 
 const getStorageKey = (colName: string) => {
   if (colName === 'ctoRequests') return 'fbc_cto_requests';
@@ -7,6 +7,63 @@ const getStorageKey = (colName: string) => {
 };
 
 const getDeletedKey = (colName: string) => `fbc_deleted_${colName}`;
+
+let cloudInitializedCache: boolean | null = null;
+
+async function isCloudInitialized(): Promise<boolean> {
+  if (cloudInitializedCache !== null) return cloudInitializedCache;
+  try {
+    const metaSnap = await getDoc(doc(db, '_metadata', 'initialized'));
+    if (metaSnap.exists()) {
+      cloudInitializedCache = true;
+      return true;
+    }
+  } catch (e) {
+    console.error('Error checking cloud initialized status:', e);
+  }
+  return false;
+}
+
+async function markCloudInitialized() {
+  cloudInitializedCache = true;
+  try {
+    await setDoc(
+      doc(db, '_metadata', 'initialized'),
+      { initialized: true, timestamp: new Date().toISOString() },
+      { merge: true }
+    );
+  } catch (e) {
+    console.error('Error marking cloud initialized:', e);
+  }
+}
+
+export function sortItemsByCollection<T extends { id: string }>(
+  colName: string,
+  items: T[]
+): T[] {
+  return [...items].sort((a: any, b: any) => {
+    if (colName === 'activityLogs' || colName === 'ctoAdjustments') {
+      const timeA = new Date(a.timestamp || 0).getTime();
+      const timeB = new Date(b.timestamp || 0).getTime();
+      return timeB - timeA;
+    }
+    if (colName === 'disputes' || colName === 'ctoRequests') {
+      const timeA = new Date(a.submittedAt || a.date || 0).getTime();
+      const timeB = new Date(b.submittedAt || b.date || 0).getTime();
+      return timeB - timeA;
+    }
+    if (colName === 'summaries') {
+      return (b.date || '').localeCompare(a.date || '');
+    }
+    if (colName === 'schedules') {
+      return (b.effectiveDate || '').localeCompare(a.effectiveDate || '');
+    }
+    if (colName === 'users') {
+      return (a.name || '').localeCompare(b.name || '');
+    }
+    return 0;
+  });
+}
 
 export function getDeletedIds(colName: string): Set<string> {
   try {
@@ -46,25 +103,29 @@ export function subscribeCollection<T extends { id: string }>(
       const deletedSet = getDeletedIds(collectionName);
 
       if (snapshot.empty) {
-        const isSeeded = localStorage.getItem(seededKey);
-        if (isSeeded) {
+        const isSeededLocally = localStorage.getItem(seededKey);
+        const isSeededInCloud = await isCloudInitialized();
+
+        if (isSeededLocally || isSeededInCloud) {
           // Collection was already initialized; empty means intentionally empty!
           localStorage.setItem(storageKey, JSON.stringify([]));
           onUpdate([]);
           return;
         }
 
-        // If not seeded yet, check if we have cached local data
+        // If not seeded yet anywhere, check if we have cached local data
         const cached = localStorage.getItem(storageKey);
         if (cached) {
           try {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed) && parsed.length > 0) {
               const filtered = parsed.filter((item) => !deletedSet.has(item.id));
+              const sorted = sortItemsByCollection(collectionName, filtered);
               localStorage.setItem(seededKey, 'true');
-              onUpdate(filtered);
+              await markCloudInitialized();
+              onUpdate(sorted);
               // Seed cached items to firestore so cloud is populated
-              for (const item of filtered) {
+              for (const item of sorted) {
                 try {
                   await setDoc(doc(db, collectionName, item.id), cleanUndefined(item), { merge: true });
                 } catch (e) {
@@ -80,9 +141,12 @@ export function subscribeCollection<T extends { id: string }>(
 
         // If no cache and initial default data exists, seed once
         const validInitial = initialData.filter((item) => !deletedSet.has(item.id));
-        if (validInitial.length > 0) {
+        const sortedInitial = sortItemsByCollection(collectionName, validInitial);
+
+        if (sortedInitial.length > 0) {
           localStorage.setItem(seededKey, 'true');
-          for (const item of validInitial) {
+          await markCloudInitialized();
+          for (const item of sortedInitial) {
             try {
               await setDoc(doc(db, collectionName, item.id), cleanUndefined(item), { merge: true });
             } catch (e) {
@@ -90,28 +154,33 @@ export function subscribeCollection<T extends { id: string }>(
             }
           }
           try {
-            localStorage.setItem(storageKey, JSON.stringify(validInitial));
+            localStorage.setItem(storageKey, JSON.stringify(sortedInitial));
           } catch (e) {
             console.error(e);
           }
-          onUpdate(validInitial);
+          onUpdate(sortedInitial);
         } else {
           localStorage.setItem(seededKey, 'true');
+          await markCloudInitialized();
           localStorage.setItem(storageKey, JSON.stringify([]));
           onUpdate([]);
         }
       } else {
         localStorage.setItem(seededKey, 'true');
+        await markCloudInitialized();
+
         const items: T[] = snapshot.docs
           .map((docSnap) => docSnap.data() as T)
           .filter((item) => !deletedSet.has(item.id));
 
+        const sortedItems = sortItemsByCollection(collectionName, items);
+
         try {
-          localStorage.setItem(storageKey, JSON.stringify(items));
+          localStorage.setItem(storageKey, JSON.stringify(sortedItems));
         } catch (err) {
           console.error(`Failed caching ${storageKey}`, err);
         }
-        onUpdate(items);
+        onUpdate(sortedItems);
       }
     },
     (error) => {
@@ -123,7 +192,8 @@ export function subscribeCollection<T extends { id: string }>(
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed)) {
             const filtered = parsed.filter((item) => !deletedSet.has(item.id));
-            onUpdate(filtered);
+            const sorted = sortItemsByCollection(collectionName, filtered);
+            onUpdate(sorted);
             return;
           }
         } catch (e) {
@@ -131,7 +201,8 @@ export function subscribeCollection<T extends { id: string }>(
         }
       }
       const validInitial = initialData.filter((item) => !deletedSet.has(item.id));
-      onUpdate(validInitial);
+      const sortedInitial = sortItemsByCollection(collectionName, validInitial);
+      onUpdate(sortedInitial);
     }
   );
 }

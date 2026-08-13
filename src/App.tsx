@@ -132,10 +132,14 @@ export default function App() {
     saveDocument('activityLogs', newLog);
   };
 
-  const handleClearActivityLogs = () => {
+  const handleClearActivityLogs = async () => {
+    for (const log of activityLogs) {
+      await removeDocument('activityLogs', log.id);
+    }
     setActivityLogs([]);
     try {
       localStorage.removeItem('fbc_activity_logs');
+      localStorage.removeItem('fbc_deleted_activityLogs');
     } catch (e) {
       console.error(e);
     }
