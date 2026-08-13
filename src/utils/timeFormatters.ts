@@ -4,6 +4,46 @@ import { AttendanceSummaryDaily, AttendanceStatus, User, BiometricPunch } from '
  * Utility functions for time and date formatting in Attendance & Punch History.
  */
 
+export function formatRealtimeTimestamp(isoStr?: string | null): string {
+  if (!isoStr) {
+    return formatLocalDate(new Date());
+  }
+
+  const trimmed = isoStr.trim();
+
+  // If already formatted like "YYYY-MM-DD hh:mm:ss AM/PM", return directly
+  if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+(AM|PM)$/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  let parseable = trimmed;
+  // If formatted like YYYY-MM-DD HH:mm:ss without T or Z, or with space instead of T, append Z if from UTC ISO
+  if (/^\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(parseable)) {
+    parseable = parseable.replace(' ', 'T') + 'Z';
+  }
+
+  const dt = new Date(parseable);
+  if (isNaN(dt.getTime())) {
+    return isoStr;
+  }
+
+  return formatLocalDate(dt);
+}
+
+function formatLocalDate(dt: Date): string {
+  const year = dt.getFullYear();
+  const month = String(dt.getMonth() + 1).padStart(2, '0');
+  const day = String(dt.getDate()).padStart(2, '0');
+  let hours = dt.getHours();
+  const mins = String(dt.getMinutes()).padStart(2, '0');
+  const secs = String(dt.getSeconds()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12 || 12;
+  const hh = String(hours).padStart(2, '0');
+
+  return `${year}-${month}-${day} ${hh}:${mins}:${secs} ${ampm}`;
+}
+
 /**
  * Extracts breakOut and breakIn timestamps from raw punches
  */

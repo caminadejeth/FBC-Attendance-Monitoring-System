@@ -3,7 +3,8 @@ import { DatePickerInput } from './DatePickerInput';
 import { AttendanceSummaryDaily, CtoManualAdjustment, CtoRequest, DisputeRequest, User } from '../types';
 import { TimeAdjustmentModal } from './TimeAdjustmentModal';
 import { getUserCtoStats } from '../utils/ctoHelper';
-import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, parseToYYYYMMDD } from '../utils/timeFormatters';
+import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, parseToYYYYMMDD, formatRealtimeTimestamp } from '../utils/timeFormatters';
+import { isFieldAdjusted, getAdjustedDisplayTime } from '../utils/adjustmentHelper';
 import {
   showConfirmDisputeAlert,
   showDisputeSuccessAlert,
@@ -35,6 +36,7 @@ import * as XLSX from 'xlsx';
 interface PersonalPunchesTableProps {
   currentUser: User;
   summaries: AttendanceSummaryDaily[];
+  disputes?: DisputeRequest[];
   ctoRequests: CtoRequest[];
   ctoAdjustments: CtoManualAdjustment[];
   onSubmitCtoRequest: (req: Omit<CtoRequest, 'id' | 'status' | 'submittedAt'>) => void;
@@ -45,6 +47,7 @@ interface PersonalPunchesTableProps {
 export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
   currentUser,
   summaries,
+  disputes = [],
   ctoRequests,
   ctoAdjustments,
   onSubmitCtoRequest,
@@ -290,82 +293,6 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
         </div>
       </div>
 
-      {/* Date Range Filter Bar */}
-      <div className="bg-white rounded-2xl border-2 border-zinc-950 p-4 shadow-sm space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <CalendarDays className="w-4 h-4 text-amber-600" />
-            <h4 className="text-xs font-black uppercase tracking-wider text-zinc-900">
-              Filter Date Range
-            </h4>
-          </div>
-
-          {/* Preset Buttons */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            {[
-              { id: 'THIS_PAY_PERIOD', label: 'This Pay Period' },
-              { id: 'LAST_15_DAYS', label: 'Last 15 Days' },
-              { id: 'THIS_MONTH', label: 'This Month' },
-              { id: 'ALL', label: 'All Records' },
-            ].map((preset) => (
-              <button
-                key={preset.id}
-                onClick={() => handlePresetChange(preset.id)}
-                className={`px-3 py-1 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
-                  activePreset === preset.id
-                    ? 'bg-amber-400 text-zinc-950 border border-zinc-950 shadow-xs'
-                    : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 border border-zinc-200'
-                }`}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Custom Start & End Date Pickers */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-zinc-100">
-          <DatePickerInput
-            label="Start Date (Month/Day/Year)"
-            value={startDate}
-            onChange={(val) => {
-              setStartDate(val);
-              setActivePreset('CUSTOM');
-            }}
-          />
-
-          <DatePickerInput
-            label="End Date (Month/Day/Year)"
-            value={endDate}
-            onChange={(val) => {
-              setEndDate(val);
-              setActivePreset('CUSTOM');
-            }}
-          />
-
-          <div className="sm:col-span-2 lg:col-span-2 flex items-end justify-between bg-amber-50/80 border border-amber-200 rounded-xl p-2.5 text-xs">
-            <div>
-              <span className="text-[10px] font-black uppercase text-amber-800 block">
-                Filtered Summary Totals {startDate && endDate ? `(${formatDateMDYYYY(startDate)} – ${formatDateMDYYYY(endDate)})` : ''}
-              </span>
-              <div className="flex gap-4 font-mono font-bold text-zinc-900 text-xs mt-0.5">
-                <span>Total Net Hours: <strong className="text-zinc-950">{totalWorkedFiltered.toFixed(1)}h</strong></span>
-                <span>Potential CTO Eligible: <strong className="text-emerald-700">+{totalCtoFiltered.toFixed(1)}h</strong></span>
-              </div>
-            </div>
-
-            {(startDate || endDate) && (
-              <button
-                onClick={() => handlePresetChange('ALL')}
-                className="text-[10px] font-extrabold text-amber-900 underline hover:text-amber-700 cursor-pointer"
-              >
-                Clear Filter
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
       {/* Main Personal Attendance Log Table */}
       <div className="bg-white rounded-2xl border-2 border-zinc-950 overflow-hidden shadow-xl">
         <div className="p-4 bg-zinc-900 text-white flex items-center justify-between border-b-2 border-zinc-950">
@@ -420,6 +347,11 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                     if (!hasClockOut) missingPunches.push('Clock-Out');
                   }
 
+                  const clockInVal = getAdjustedDisplayTime(s, 'firstIn', disputes) || s.firstIn;
+                  const breakOutVal = getAdjustedDisplayTime(s, 'breakOut', disputes) || s.breakOut;
+                  const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
+                  const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
+
                   return (
                     <tr key={s.id} className="hover:bg-amber-50/50 transition-colors">
                       {/* Date */}
@@ -436,9 +368,14 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
 
                       {/* Time-In */}
                       <td className="py-3 px-4 font-mono font-semibold whitespace-nowrap text-zinc-900">
-                        {s.firstIn ? (
+                        {isFieldAdjusted(s, 'firstIn', disputes) ? (
+                          <span className="adjusted-time-blinking" title="Time-In Adjusted via Approved Request">
+                            {clockInVal ? formatTime12Hr(clockInVal) : '08:00 AM'}
+                            <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                          </span>
+                        ) : clockInVal ? (
                           <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                            {formatTime12Hr(s.firstIn)}
+                            {formatTime12Hr(clockInVal)}
                           </span>
                         ) : (
                           <span className="text-rose-500 font-bold">No Data</span>
@@ -447,19 +384,42 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
 
                       {/* Break-Out */}
                       <td className="py-3 px-4 font-mono text-zinc-700 whitespace-nowrap">
-                        {s.breakOut ? formatTime12Hr(s.breakOut) : 'No Data'}
+                        {isFieldAdjusted(s, 'breakOut', disputes) ? (
+                          <span className="adjusted-time-blinking" title="Break-Out Adjusted via Approved Request">
+                            {breakOutVal ? formatTime12Hr(breakOutVal) : '12:00 PM'}
+                            <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                          </span>
+                        ) : breakOutVal ? (
+                          formatTime12Hr(breakOutVal)
+                        ) : (
+                          'No Data'
+                        )}
                       </td>
 
                       {/* Break-In */}
                       <td className="py-3 px-4 font-mono text-zinc-700 whitespace-nowrap">
-                        {s.breakIn ? formatTime12Hr(s.breakIn) : 'No Data'}
+                        {isFieldAdjusted(s, 'breakIn', disputes) ? (
+                          <span className="adjusted-time-blinking" title="Break-In Adjusted via Approved Request">
+                            {breakInVal ? formatTime12Hr(breakInVal) : '01:00 PM'}
+                            <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                          </span>
+                        ) : breakInVal ? (
+                          formatTime12Hr(breakInVal)
+                        ) : (
+                          'No Data'
+                        )}
                       </td>
 
                       {/* Time-Out */}
                       <td className="py-3 px-4 font-mono font-semibold whitespace-nowrap text-zinc-900">
-                        {s.lastOut ? (
+                        {isFieldAdjusted(s, 'lastOut', disputes) ? (
+                          <span className="adjusted-time-blinking" title="Time-Out Adjusted via Approved Request">
+                            {clockOutVal ? formatTime12Hr(clockOutVal) : '05:00 PM'}
+                            <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                          </span>
+                        ) : clockOutVal ? (
                           <span className="text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                            {formatTime12Hr(s.lastOut)}
+                            {formatTime12Hr(clockOutVal)}
                           </span>
                         ) : (
                           <span className="text-rose-500 font-bold">No Data</span>
@@ -624,7 +584,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-zinc-700">{req.reason}</p>
-                  <p className="text-[10px] text-zinc-400">Submitted on: {req.submittedAt}</p>
+                  <p className="text-[10px] text-zinc-400">Submitted on: {formatRealtimeTimestamp(req.submittedAt)}</p>
                 </div>
 
                 <div className="flex items-center gap-2">

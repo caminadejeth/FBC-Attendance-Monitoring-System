@@ -3,6 +3,7 @@ import { DatePickerInput } from './DatePickerInput';
 import { TimeAdjustmentModal } from './TimeAdjustmentModal';
 import { DisputeCardDetails } from './DisputeCardDetails';
 import {
+  ActivityLog,
   AttendanceSummaryDaily,
   CtoManualAdjustment,
   CtoRequest,
@@ -16,11 +17,14 @@ import { WorkScheduleManager } from './WorkScheduleManager';
 import { ZktecoDatUploader } from './ZktecoDatUploader';
 import { CtoLeaveDashboard } from './CtoLeaveDashboard';
 import { EmployeeDtrSheet } from './EmployeeDtrSheet';
+import { ActivityLogsTable } from './ActivityLogsTable';
 import {
   parseAndCleanBiometricExcel,
   generateSampleBiometricExcel,
 } from '../utils/fileProcessor';
-import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents } from '../utils/timeFormatters';
+import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, formatRealtimeTimestamp } from '../utils/timeFormatters';
+import { isFieldAdjusted, getAdjustedDisplayTime } from '../utils/adjustmentHelper';
+import { exportDisputesToPdf } from '../utils/pdfExportHelper';
 import {
   showUploadProcessingAlert,
   showUploadSuccessAlert,
@@ -39,6 +43,7 @@ import {
   Upload,
   Download,
   FileSpreadsheet,
+  FileText,
   CheckCircle2,
   AlertTriangle,
   Clock,
@@ -79,6 +84,8 @@ interface ManagerDashboardProps {
   onApproveCtoRequest?: (id: string, notes?: string, role?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => void;
   onRejectCtoRequest?: (id: string, notes?: string) => void;
   onSyncGoogleSheets?: () => void;
+  activityLogs?: ActivityLog[];
+  onClearActivityLogs?: () => void;
   activeTab: string;
 }
 
@@ -101,10 +108,12 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   onApproveCtoRequest = (_id: string, _notes?: string, _role?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => {},
   onRejectCtoRequest = (_id: string, _notes?: string) => {},
   onSyncGoogleSheets,
+  activityLogs = [],
+  onClearActivityLogs,
   activeTab,
 }) => {
   // Navigation sub-tab inside Manager Dashboard
-  const [managerTab, setManagerTab] = useState<'PERSONAL' | 'ZKTECO_UPLOAD' | 'ZKTECO_DAT' | 'BRANCH_LOGS' | 'SCHEDULES' | 'DISPUTES' | 'MY_CTO'>('BRANCH_LOGS');
+  const [managerTab, setManagerTab] = useState<'PERSONAL' | 'ZKTECO_UPLOAD' | 'ZKTECO_DAT' | 'BRANCH_LOGS' | 'SCHEDULES' | 'DISPUTES' | 'MY_CTO' | 'ACTIVITY_LOGS'>('BRANCH_LOGS');
 
   // Sync activeTab prop from sidebar navigation
   React.useEffect(() => {
@@ -122,6 +131,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       setManagerTab('MY_CTO');
     } else if (activeTab === 'my-punches' || activeTab === 'my-disputes' || activeTab === 'personal') {
       setManagerTab('PERSONAL');
+    } else if (activeTab === 'activity-logs') {
+      setManagerTab('ACTIVITY_LOGS');
     }
   }, [activeTab]);
 
@@ -363,16 +374,18 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     const confirm = await showConfirmDisputeAlert(disputeType, dateStr);
 
     if (confirm.isConfirmed) {
-      onSubmitDispute({
+      const payload: Omit<DisputeRequest, 'id' | 'status' | 'submittedAt'> = {
         employeeId: currentUser.employeeId,
         employeeName: currentUser.name,
         date: dateStr,
         type: disputeType,
         reason: disputeReason,
-        requestedClockIn: requestedIn,
-        requestedClockOut: requestedOut,
         requestedHours: 8.0,
-      });
+      };
+      if (requestedIn) payload.requestedClockIn = requestedIn;
+      if (requestedOut) payload.requestedClockOut = requestedOut;
+
+      onSubmitDispute(payload);
 
       setShowDisputeModal(false);
       showDisputeSuccessAlert();
@@ -516,13 +529,22 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
               </p>
             </div>
 
-            <button
-              id="btn-manager-new-adjustment"
-              onClick={() => setShowAdjustmentModal(true)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer shrink-0"
-            >
-              <PlusCircle className="w-4 h-4" /> New Time Adjustment Form
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                id="btn-export-pdf-disputes-manager"
+                onClick={() => exportDisputesToPdf(disputes, currentUser.department || 'ALL')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-amber-400 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer"
+              >
+                <FileText className="w-4 h-4 text-amber-400" /> Export PDF (4/Page)
+              </button>
+              <button
+                id="btn-manager-new-adjustment"
+                onClick={() => setShowAdjustmentModal(true)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer"
+              >
+                <PlusCircle className="w-4 h-4" /> New Time Adjustment Form
+              </button>
+            </div>
           </div>
 
           <div className="space-y-3">
@@ -913,16 +935,65 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                       if (!hasClockOut) missingPunches.push('Clock-Out');
                     }
 
+                    const clockInVal = getAdjustedDisplayTime(s, 'firstIn', disputes) || s.firstIn;
+                    const breakOutVal = getAdjustedDisplayTime(s, 'breakOut', disputes) || s.breakOut;
+                    const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
+                    const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
+
                     return (
                       <tr key={s.id} className="hover:bg-gray-50 transition-colors">
                         <td className="p-3 font-mono font-bold text-[#656D4A]">{s.employeeId}</td>
                         <td className="p-3 font-bold text-[#2C3524]">{s.employeeName}</td>
                         <td className="p-3 text-[11px] font-semibold text-zinc-600">{s.branch || s.department || 'Main Branch'}</td>
                         <td className="p-3 font-bold text-[#2C3524]">{formatDateWithDay(s.date, s.weekday)}</td>
-                        <td className="p-3 font-mono font-semibold text-gray-700">{s.firstIn ? formatTime12Hr(s.firstIn) : 'No Data'}</td>
-                        <td className="p-3 font-mono text-zinc-600">{s.breakOut ? formatTime12Hr(s.breakOut) : 'No Data'}</td>
-                        <td className="p-3 font-mono text-zinc-600">{s.breakIn ? formatTime12Hr(s.breakIn) : 'No Data'}</td>
-                        <td className="p-3 font-mono font-semibold text-gray-700">{s.lastOut ? formatTime12Hr(s.lastOut) : 'No Data'}</td>
+                        <td className="p-3 font-mono text-xs whitespace-nowrap">
+                          {isFieldAdjusted(s, 'firstIn', disputes) ? (
+                            <span className="adjusted-time-blinking" title="Clock In Adjusted via Dual Approved Request">
+                              {clockInVal ? formatTime12Hr(clockInVal) : '08:00 AM'}
+                              <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                            </span>
+                          ) : clockInVal ? (
+                            formatTime12Hr(clockInVal)
+                          ) : (
+                            'No Data'
+                          )}
+                        </td>
+                        <td className="p-3 font-mono text-xs whitespace-nowrap">
+                          {isFieldAdjusted(s, 'breakOut', disputes) ? (
+                            <span className="adjusted-time-blinking" title="Break Out Adjusted via Dual Approved Request">
+                              {breakOutVal ? formatTime12Hr(breakOutVal) : '12:00 PM'}
+                              <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                            </span>
+                          ) : breakOutVal ? (
+                            formatTime12Hr(breakOutVal)
+                          ) : (
+                            'No Data'
+                          )}
+                        </td>
+                        <td className="p-3 font-mono text-xs whitespace-nowrap">
+                          {isFieldAdjusted(s, 'breakIn', disputes) ? (
+                            <span className="adjusted-time-blinking" title="Break In Adjusted via Dual Approved Request">
+                              {breakInVal ? formatTime12Hr(breakInVal) : '01:00 PM'}
+                              <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                            </span>
+                          ) : breakInVal ? (
+                            formatTime12Hr(breakInVal)
+                          ) : (
+                            'No Data'
+                          )}
+                        </td>
+                        <td className="p-3 font-mono text-xs whitespace-nowrap">
+                          {isFieldAdjusted(s, 'lastOut', disputes) ? (
+                            <span className="adjusted-time-blinking" title="Clock Out Adjusted via Dual Approved Request">
+                              {clockOutVal ? formatTime12Hr(clockOutVal) : '05:00 PM'}
+                              <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                            </span>
+                          ) : clockOutVal ? (
+                            formatTime12Hr(clockOutVal)
+                          ) : (
+                            'No Data'
+                          )}
+                        </td>
                         <td className="p-3">{s.totalBreakMinutes}m</td>
                         <td className="p-3 font-extrabold text-[#2C3524]">{s.netHoursWorked.toFixed(1)} hrs</td>
                         <td className="p-3">
@@ -1068,7 +1139,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                               {isCredit ? '+' : '-'}{req.hoursRequested.toFixed(1)} hrs CTO
                             </span>
                             <span className="text-gray-500 text-[10px]">
-                              Submitted: {req.submittedAt}
+                              Submitted: {formatRealtimeTimestamp(req.submittedAt)}
                             </span>
                           </div>
 
@@ -1087,7 +1158,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                               </div>
                               {req.reviewedAt && (
                                 <span className="text-[10px] font-mono font-bold text-rose-800 shrink-0">
-                                  {req.reviewedAt}
+                                  {formatRealtimeTimestamp(req.reviewedAt)}
                                 </span>
                               )}
                             </div>
@@ -1226,6 +1297,15 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* ACTIVITY LOGS TAB */}
+      {managerTab === 'ACTIVITY_LOGS' && (
+        <ActivityLogsTable
+          activityLogs={activityLogs}
+          onClearActivityLogs={onClearActivityLogs}
+          currentUser={currentUser}
+        />
       )}
 
       {/* FILE DISPUTE MODAL */}

@@ -4,7 +4,7 @@ import { getUserCtoStats } from '../utils/ctoHelper';
 import { DatePickerInput } from './DatePickerInput';
 import { TablePagination } from './TablePagination';
 import { showSuccessAlert, showActionSuccessToast } from '../utils/sweetAlerts';
-import { formatDateWithDay, formatDateMDYY } from '../utils/timeFormatters';
+import { formatDateWithDay, formatDateMDYY, formatRealtimeTimestamp } from '../utils/timeFormatters';
 import {
   Award,
   PlusCircle,
@@ -250,7 +250,7 @@ export const CtoLeaveDashboard: React.FC<CtoLeaveDashboardProps> = ({
                   <td className="p-2.5 text-gray-700 max-w-[200px] truncate" title={req.reason}>
                     {req.reason}
                   </td>
-                  <td className="p-2.5 text-gray-500 font-mono text-[11px]">{req.submittedAt}</td>
+                  <td className="p-2.5 text-gray-500 font-mono text-[11px]">{formatRealtimeTimestamp(req.submittedAt)}</td>
                   <td className="p-2.5 text-center">
                     {req.status === 'PENDING' && (
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
@@ -281,7 +281,7 @@ export const CtoLeaveDashboard: React.FC<CtoLeaveDashboardProps> = ({
                         )}
                         {req.reviewedAt && (
                           <span className="text-[10px] text-zinc-400 font-mono block">
-                            {req.reviewedAt}
+                            {formatRealtimeTimestamp(req.reviewedAt)}
                           </span>
                         )}
                       </div>

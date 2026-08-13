@@ -1,6 +1,7 @@
 import React from 'react';
 import { DisputeRequest } from '../types';
 import { Paperclip, ExternalLink, CheckCircle2, XCircle, Clock, UserCheck, ShieldCheck } from 'lucide-react';
+import { formatRealtimeTimestamp } from '../utils/timeFormatters';
 
 interface DisputeCardDetailsProps {
   dispute: DisputeRequest;
@@ -92,7 +93,7 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
             <Clock className="w-3 h-3 text-zinc-500" /> Request History & Timeline
           </span>
           <span className="font-mono text-[10px] text-zinc-600 bg-zinc-200/60 px-1.5 py-0.5 rounded font-bold">
-            Submitted: {dispute.submittedAt}
+            Submitted: {formatRealtimeTimestamp(dispute.submittedAt)}
           </span>
         </div>
 
@@ -104,17 +105,27 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
                 Dual Approval Completed (Manager & Payroll)
               </span>
               <span className="font-mono text-[10px] bg-emerald-200/90 text-emerald-950 px-2 py-0.5 rounded font-black border border-emerald-400">
-                Fully Approved: {approvalDate || dispute.submittedAt}
+                Fully Approved: {formatRealtimeTimestamp(approvalDate || dispute.submittedAt)}
               </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] pt-1">
-              <div className="bg-white/80 p-1.5 rounded border border-emerald-200 flex items-center gap-1.5">
-                <UserCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                <span>Branch Mgr: <strong className="text-emerald-950">{dispute.managerApprovedBy || dispute.reviewedBy || 'Manager'}</strong></span>
+              <div className="bg-white/80 p-2 rounded border border-emerald-200 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1.5 text-emerald-900 font-bold">
+                  <UserCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  <span>Branch Mgr: <strong>{dispute.managerApprovedBy || dispute.reviewedBy || 'Manager'}</strong></span>
+                </div>
+                <div className="text-[10px] text-emerald-800 font-mono font-semibold pl-5">
+                  Approved on: {formatRealtimeTimestamp(dispute.managerApprovedAt || approvalDate || dispute.submittedAt)}
+                </div>
               </div>
-              <div className="bg-white/80 p-1.5 rounded border border-emerald-200 flex items-center gap-1.5">
-                <UserCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
-                <span>Payroll: <strong className="text-emerald-950">{dispute.payrollApprovedBy || dispute.reviewedBy || 'Payroll'}</strong></span>
+              <div className="bg-white/80 p-2 rounded border border-emerald-200 flex flex-col gap-0.5">
+                <div className="flex items-center gap-1.5 text-emerald-900 font-bold">
+                  <UserCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                  <span>Payroll: <strong>{dispute.payrollApprovedBy || dispute.reviewedBy || 'Payroll'}</strong></span>
+                </div>
+                <div className="text-[10px] text-emerald-800 font-mono font-semibold pl-5">
+                  Approved on: {formatRealtimeTimestamp(dispute.payrollApprovedAt || approvalDate || dispute.submittedAt)}
+                </div>
               </div>
             </div>
             {dispute.adminNotes && (
@@ -133,7 +144,7 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
                 Adjustment Rejected
               </span>
               <span className="font-mono text-[10px] bg-rose-200 text-rose-950 px-2 py-0.5 rounded font-black border border-rose-400">
-                Rejected: {dispute.reviewedAt || dispute.submittedAt}
+                Rejected: {formatRealtimeTimestamp(dispute.reviewedAt || dispute.submittedAt)}
               </span>
             </div>
             <div className="text-[11px] font-semibold text-rose-850 flex items-center gap-1.5 pt-0.5">
@@ -156,53 +167,67 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
                 Dual Approval Status
               </span>
               <span className="font-mono text-[10px] bg-amber-200/80 px-2 py-0.5 rounded text-amber-950 border border-amber-400 font-bold">
-                Submitted: {dispute.submittedAt}
+                Submitted: {formatRealtimeTimestamp(dispute.submittedAt)}
               </span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
               <div
-                className={`p-1.5 rounded border flex items-center justify-between gap-1.5 ${
+                className={`p-2 rounded border flex flex-col gap-1 ${
                   dispute.managerApproved
                     ? 'bg-emerald-100/80 border-emerald-300 text-emerald-950 font-bold'
                     : 'bg-white/80 border-amber-200 text-amber-900'
                 }`}
               >
-                <span className="flex items-center gap-1">
-                  {dispute.managerApproved ? (
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  ) : (
-                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                  )}
-                  Branch Manager
-                </span>
-                <span className="text-[10px]">
-                  {dispute.managerApproved
-                    ? `Approved (${dispute.managerApprovedBy || 'Manager'})`
-                    : 'Pending'}
-                </span>
+                <div className="flex items-center justify-between gap-1">
+                  <span className="flex items-center gap-1 font-bold">
+                    {dispute.managerApproved ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    )}
+                    Branch Manager
+                  </span>
+                  <span className="text-[10px]">
+                    {dispute.managerApproved
+                      ? `Approved (${dispute.managerApprovedBy || 'Manager'})`
+                      : 'Pending'}
+                  </span>
+                </div>
+                {dispute.managerApproved && dispute.managerApprovedAt && (
+                  <div className="text-[10px] font-mono text-emerald-800 font-semibold pl-4">
+                    {formatRealtimeTimestamp(dispute.managerApprovedAt)}
+                  </div>
+                )}
               </div>
 
               <div
-                className={`p-1.5 rounded border flex items-center justify-between gap-1.5 ${
+                className={`p-2 rounded border flex flex-col gap-1 ${
                   dispute.payrollApproved
                     ? 'bg-emerald-100/80 border-emerald-300 text-emerald-950 font-bold'
                     : 'bg-white/80 border-amber-200 text-amber-900'
                 }`}
               >
-                <span className="flex items-center gap-1">
-                  {dispute.payrollApproved ? (
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  ) : (
-                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                  )}
-                  Payroll Department
-                </span>
-                <span className="text-[10px]">
-                  {dispute.payrollApproved
-                    ? `Approved (${dispute.payrollApprovedBy || 'Payroll'})`
-                    : 'Pending'}
-                </span>
+                <div className="flex items-center justify-between gap-1">
+                  <span className="flex items-center gap-1 font-bold">
+                    {dispute.payrollApproved ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    )}
+                    Payroll Department
+                  </span>
+                  <span className="text-[10px]">
+                    {dispute.payrollApproved
+                      ? `Approved (${dispute.payrollApprovedBy || 'Payroll'})`
+                      : 'Pending'}
+                  </span>
+                </div>
+                {dispute.payrollApproved && dispute.payrollApprovedAt && (
+                  <div className="text-[10px] font-mono text-emerald-800 font-semibold pl-4">
+                    {formatRealtimeTimestamp(dispute.payrollApprovedAt)}
+                  </div>
+                )}
               </div>
             </div>
           </div>

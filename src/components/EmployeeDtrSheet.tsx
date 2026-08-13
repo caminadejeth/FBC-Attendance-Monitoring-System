@@ -9,6 +9,7 @@ import {
   getFilteredSummariesWithAbsents,
   parseToYYYYMMDD,
 } from '../utils/timeFormatters';
+import { isFieldAdjusted, getAdjustedDisplayTime } from '../utils/adjustmentHelper';
 import { showExportToast, yellowCabSwal } from '../utils/sweetAlerts';
 import * as XLSX from 'xlsx';
 import {
@@ -513,6 +514,16 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
                     if (!hasClockOut) missingPunches.push('Clock-Out');
                   }
 
+                  const isClockInAdj = isFieldAdjusted(s, 'firstIn', disputes);
+                  const isBreakOutAdj = isFieldAdjusted(s, 'breakOut', disputes);
+                  const isBreakInAdj = isFieldAdjusted(s, 'breakIn', disputes);
+                  const isClockOutAdj = isFieldAdjusted(s, 'lastOut', disputes);
+
+                  const clockInVal = getAdjustedDisplayTime(s, 'firstIn', disputes) || s.firstIn;
+                  const breakOutVal = getAdjustedDisplayTime(s, 'breakOut', disputes) || s.breakOut;
+                  const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
+                  const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
+
                   return (
                     <tr key={s.id} className="hover:bg-amber-50/50 transition-colors">
                       <td className="p-2.5 font-mono font-bold text-zinc-950 whitespace-nowrap">
@@ -526,30 +537,54 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
                           {s.branch || selectedUser.branch || selectedUser.department || 'Main Branch'}
                         </span>
                       </td>
-                      <td className="p-2.5 text-center font-mono font-bold text-zinc-900 whitespace-nowrap">
-                        {s.firstIn ? (
-                          formatTime12Hr(s.firstIn)
+                      <td className="p-2.5 text-center font-mono font-bold whitespace-nowrap">
+                        {isClockInAdj ? (
+                          <span className="adjusted-time-blinking" title="Clock In Adjusted via Approved Request">
+                            {clockInVal ? formatTime12Hr(clockInVal) : '08:00 AM'}
+                            <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                          </span>
+                        ) : clockInVal ? (
+                          formatTime12Hr(clockInVal)
                         ) : (
                           <span className="text-rose-600 font-bold text-[11px]">No Data</span>
                         )}
                       </td>
-                      <td className="p-2.5 text-center font-mono text-zinc-700 whitespace-nowrap">
-                        {breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--' ? (
+                      <td className="p-2.5 text-center font-mono whitespace-nowrap">
+                        {isBreakOutAdj ? (
+                          <span className="adjusted-time-blinking" title="Break Out Adjusted via Approved Request">
+                            {breakOutVal ? formatTime12Hr(breakOutVal) : (breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--' ? breakTimes.breakOut : '12:00 PM')}
+                            <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                          </span>
+                        ) : breakOutVal ? (
+                          formatTime12Hr(breakOutVal)
+                        ) : breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--' ? (
                           breakTimes.breakOut
                         ) : (
                           <span className="font-bold text-gray-400">No Data</span>
                         )}
                       </td>
-                      <td className="p-2.5 text-center font-mono text-zinc-700 whitespace-nowrap">
-                        {breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--' ? (
+                      <td className="p-2.5 text-center font-mono whitespace-nowrap">
+                        {isBreakInAdj ? (
+                          <span className="adjusted-time-blinking" title="Break In Adjusted via Approved Request">
+                            {breakInVal ? formatTime12Hr(breakInVal) : (breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--' ? breakTimes.breakIn : '01:00 PM')}
+                            <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                          </span>
+                        ) : breakInVal ? (
+                          formatTime12Hr(breakInVal)
+                        ) : breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--' ? (
                           breakTimes.breakIn
                         ) : (
                           <span className="font-bold text-gray-400">No Data</span>
                         )}
                       </td>
-                      <td className="p-2.5 text-center font-mono font-bold text-zinc-900 whitespace-nowrap">
-                        {s.lastOut ? (
-                          formatTime12Hr(s.lastOut)
+                      <td className="p-2.5 text-center font-mono font-bold whitespace-nowrap">
+                        {isClockOutAdj ? (
+                          <span className="adjusted-time-blinking" title="Clock Out Adjusted via Approved Request">
+                            {clockOutVal ? formatTime12Hr(clockOutVal) : '05:00 PM'}
+                            <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                          </span>
+                        ) : clockOutVal ? (
+                          formatTime12Hr(clockOutVal)
                         ) : (
                           <span className="text-rose-600 font-bold text-[11px]">No Data</span>
                         )}

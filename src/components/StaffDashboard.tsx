@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { AttendanceSummaryDaily, CtoManualAdjustment, CtoRequest, DisputeRequest, User, WorkSchedule } from '../types';
+import { ActivityLog, AttendanceSummaryDaily, CtoManualAdjustment, CtoRequest, DisputeRequest, User, WorkSchedule } from '../types';
 import { getUserCtoStats } from '../utils/ctoHelper';
 import { PersonalPunchesTable } from './PersonalPunchesTable';
 import { WorkScheduleManager } from './WorkScheduleManager';
 import { CtoLeaveDashboard } from './CtoLeaveDashboard';
+import { ActivityLogsTable } from './ActivityLogsTable';
 import { TimeAdjustmentModal } from './TimeAdjustmentModal';
 import { DisputeCardDetails } from './DisputeCardDetails';
 import {
@@ -39,6 +40,8 @@ interface StaffDashboardProps {
   onUpdateSummaryAnomaly?: (summaryId: string, newNote: string) => void;
   onSubmitDispute: (dispute: Omit<DisputeRequest, 'id' | 'status' | 'submittedAt'>) => void;
   onSubmitCtoRequest: (req: Omit<CtoRequest, 'id' | 'status' | 'submittedAt'>) => void;
+  activityLogs?: ActivityLog[];
+  onClearActivityLogs?: () => void;
   activeTab: string;
 }
 
@@ -53,6 +56,8 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   onUpdateSummaryAnomaly,
   onSubmitDispute,
   onSubmitCtoRequest,
+  activityLogs = [],
+  onClearActivityLogs,
   activeTab,
 }) => {
   // Find staff member's assigned work schedule
@@ -111,16 +116,18 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     const confirm = await showConfirmDisputeAlert(disputeType, dateStr);
 
     if (confirm.isConfirmed) {
-      onSubmitDispute({
+      const payload: Omit<DisputeRequest, 'id' | 'status' | 'submittedAt'> = {
         employeeId: currentUser.employeeId,
         employeeName: currentUser.name,
         date: dateStr,
         type: disputeType,
         reason: disputeReason,
-        requestedClockIn: requestedIn,
-        requestedClockOut: requestedOut,
         requestedHours: 8.0,
-      });
+      };
+      if (requestedIn) payload.requestedClockIn = requestedIn;
+      if (requestedOut) payload.requestedClockOut = requestedOut;
+
+      onSubmitDispute(payload);
 
       setShowDisputeModal(false);
       showDisputeSuccessAlert();
@@ -247,6 +254,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
         <PersonalPunchesTable
           currentUser={currentUser}
           summaries={summaries}
+          disputes={disputes}
           ctoRequests={ctoRequests}
           ctoAdjustments={ctoAdjustments}
           onSubmitCtoRequest={onSubmitCtoRequest}
@@ -311,6 +319,15 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* ACTIVITY LOGS TAB */}
+      {(activeTab === 'activity-logs' || activeTab === 'all') && (
+        <ActivityLogsTable
+          activityLogs={activityLogs}
+          onClearActivityLogs={onClearActivityLogs}
+          currentUser={currentUser}
+        />
       )}
 
       {/* FILE DISPUTE MODAL */}

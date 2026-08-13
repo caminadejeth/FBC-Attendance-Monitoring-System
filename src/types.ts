@@ -80,6 +80,7 @@ export interface AttendanceSummaryDaily {
   punches: BiometricPunch[];
   isAdjusted?: boolean;
   adjustmentNote?: string;
+  adjustedFields?: string[];
   uploadedByUserId?: string;
   branch?: string;
 }
@@ -184,6 +185,34 @@ export interface GoogleSheetsSyncConfig {
   sheetUrl: string;
   lastSyncedAt?: string;
   autoSyncEnabled: boolean;
+}
+
+export type ActivityActionType =
+  | 'DISPUTE_APPROVAL'
+  | 'DISPUTE_REJECTION'
+  | 'DISPUTE_FILING'
+  | 'CTO_FILING'
+  | 'CTO_APPROVAL'
+  | 'CTO_REJECTION'
+  | 'MANUAL_ADJUSTMENT'
+  | 'CTO_ADJUSTMENT'
+  | 'DATA_CLEAR'
+  | 'SCHEDULE_UPDATE'
+  | 'USER_MANAGEMENT'
+  | 'BIOMETRIC_UPLOAD'
+  | 'AUTH'
+  | 'SYSTEM_EVENT';
+
+export interface ActivityLog {
+  id: string;
+  timestamp: string; // ISO string or readable format
+  userName: string;
+  userRole: UserRole | string;
+  userEmail?: string;
+  actionType: ActivityActionType;
+  actionCategory?: string; // e.g. 'Disputes', 'Data Clear', 'Adjustments', 'Schedules', 'Users', 'Biometrics'
+  details: string;
+  targetId?: string;
 }
 
 export interface SyncLog {

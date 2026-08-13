@@ -22,6 +22,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   KeyRound,
+  History,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -193,6 +194,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             icon: Users,
             description: 'Employee & Manager directory',
           },
+          {
+            id: 'activity-logs',
+            label: 'Activity Log',
+            icon: History,
+            description: 'Audit history of actions & data changes',
+          },
         ];
 
       case 'BRANCH_MANAGER':
@@ -247,6 +254,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             icon: Award,
             description: 'Compensatory Time Off balance & leave requests',
           },
+          {
+            id: 'activity-logs',
+            label: 'Activity Log',
+            icon: History,
+            description: 'Audit history of actions & branch activity',
+          },
         ];
 
       case 'PAYROLL':
@@ -278,12 +291,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             description: 'View attachments, request history & manager approvals',
           },
           {
-            id: 'daily-logs',
-            label: 'Daily Attendance Logs',
-            icon: FileText,
-            description: 'Uploaded biometric daily records',
-          },
-          {
             id: 'upload',
             label: 'Upload ZKTeco Excel',
             icon: Upload,
@@ -302,48 +309,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
             badge: pendingCtoCount > 0 ? pendingCtoCount : undefined,
             description: 'Compensatory Time Off approval',
           },
+          {
+            id: 'activity-logs',
+            label: 'Activity Log',
+            icon: History,
+            description: 'Audit history of actions & data changes',
+          },
         ];
 
       case 'SHIFT_MANAGER':
-        return [
-          {
-            id: 'schedules',
-            label: 'Work Schedule Roster',
-            icon: CalendarDays,
-            description: 'Assign staff & manager shift hours',
-          },
-          {
-            id: 'upload',
-            label: 'Upload ZKTeco Excel',
-            icon: Upload,
-            description: 'Branch biometric Excel parser',
-          },
-          {
-            id: 'upload-dat',
-            label: 'Upload ZKTeco .DAT',
-            icon: Upload,
-            description: 'Old model .dat file parser',
-          },
-          {
-            id: 'my-punches',
-            label: 'My Personal Punches',
-            icon: UserCheck,
-            description: 'My 8h shift attendance log',
-          },
-          {
-            id: 'my-disputes',
-            label: 'File / View Disputes',
-            icon: AlertCircle,
-            description: 'Request missing punch corrections',
-          },
-          {
-            id: 'my-cto',
-            label: 'CTO Leave Requests',
-            icon: Award,
-            description: 'Compensatory Time Off balance & leave requests',
-          },
-        ];
-
       case 'STAFF':
       default:
         return [
@@ -370,6 +344,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             label: 'CTO Leave Requests',
             icon: Award,
             description: 'Compensatory Time Off balance & leave requests',
+          },
+          {
+            id: 'activity-logs',
+            label: 'Activity Log',
+            icon: History,
+            description: 'Audit history of actions & personal activity',
           },
         ];
     }
@@ -574,9 +554,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             )}
 
-            {/* ZKTeco Quick Upload Button for Admin, Shift Manager, Branch Manager, Payroll */}
+            {/* ZKTeco Quick Upload Button for Admin, Branch Manager, Payroll */}
             {(currentUser.role === 'ADMIN' ||
-              currentUser.role === 'SHIFT_MANAGER' ||
               currentUser.role === 'BRANCH_MANAGER' ||
               currentUser.role === 'PAYROLL') && (
               <>

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import Swal from 'sweetalert2';
 import { DatePickerInput } from './DatePickerInput';
 import { TimeAdjustmentModal } from './TimeAdjustmentModal';
 import { DisputeCardDetails } from './DisputeCardDetails';
@@ -9,10 +10,13 @@ import {
   BiometricPunch,
   WorkSchedule,
   CtoRequest,
+  ActivityLog,
+  ActivityActionType,
 } from '../types';
 import { WorkScheduleManager } from './WorkScheduleManager';
 import { ZktecoDatUploader } from './ZktecoDatUploader';
 import { EmployeeDtrSheet } from './EmployeeDtrSheet';
+import { ActivityLogsTable } from './ActivityLogsTable';
 import {
   QuickUserImportModal,
   exportUsersToExcel,
@@ -22,7 +26,9 @@ import {
   generateSampleBiometricExcel,
   REQUIRED_HEADERS,
 } from '../utils/fileProcessor';
-import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, getBreakTimes, calculateGrossHours } from '../utils/timeFormatters';
+import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, getBreakTimes, calculateGrossHours, formatRealtimeTimestamp } from '../utils/timeFormatters';
+import { isFieldAdjusted, getAdjustedDisplayTime } from '../utils/adjustmentHelper';
+import { exportDisputesToPdf } from '../utils/pdfExportHelper';
 import {
   showUploadProcessingAlert,
   showUploadSuccessAlert,
@@ -43,6 +49,7 @@ import {
   Search,
   Filter,
   FileSpreadsheet,
+  FileText,
   UserPlus,
   Shield,
   Edit,
@@ -57,6 +64,7 @@ import {
   CalendarDays,
   PlusCircle,
   Trash2,
+  History,
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -66,6 +74,7 @@ interface AdminDashboardProps {
   punches: BiometricPunch[];
   schedules?: WorkSchedule[];
   ctoRequests?: CtoRequest[];
+  activityLogs?: ActivityLog[];
   onSaveSchedule?: (schedule: WorkSchedule) => void;
   onUploadProcessed: (newSummaries: AttendanceSummaryDaily[]) => void;
   onUpdateSummaryAnomaly?: (summaryId: string, newNote: string) => void;
@@ -77,7 +86,9 @@ interface AdminDashboardProps {
   onDeleteUser?: (userId: string) => void;
   onDeleteDispute?: (disputeId: string) => void;
   onDeleteSummary?: (summaryId: string) => void;
+  onClearSummaries?: (summaryIdsToClear?: string[]) => void;
   onDeleteCtoRequest?: (ctoId: string) => void;
+  onClearActivityLogs?: () => void;
   onSyncGoogleSheets: () => void;
   activeTab: string;
 }
@@ -89,6 +100,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   punches,
   schedules = [],
   ctoRequests = [],
+  activityLogs = [],
   onSaveSchedule = () => {},
   onUploadProcessed,
   onUpdateSummaryAnomaly,
@@ -100,10 +112,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onDeleteUser,
   onDeleteDispute,
   onDeleteSummary,
+  onClearSummaries,
   onDeleteCtoRequest,
+  onClearActivityLogs,
   onSyncGoogleSheets,
   activeTab,
 }) => {
+  // Activity Log Search & Filter State
+  const [logSearchQuery, setLogSearchQuery] = useState('');
+  const [logCategoryFilter, setLogCategoryFilter] = useState('ALL');
+
   // File upload state
   const [isProcessing, setIsProcessing] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<{
@@ -235,6 +253,79 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (result.isConfirmed && onDeleteSummary) {
       onDeleteSummary(s.id);
       showSuccessAlert('Record Deleted', `Daily attendance log for ${s.employeeName} on ${s.date} has been removed.`);
+    }
+  };
+
+  const handleClearUploadedLogs = async () => {
+    if (!summaries || summaries.length === 0) {
+      showErrorAlert('No Uploaded Logs', 'There are no uploaded attendance logs in the database to clear.');
+      return;
+    }
+
+    const isFiltered = filteredSummaries.length !== summaries.length && filteredSummaries.length > 0;
+
+    const result = await yellowCabSwal.fire({
+      title: 'CLEAR UPLOADED LOGS',
+      html: `
+        <div class="text-left space-y-3 text-xs text-zinc-800">
+          <p class="font-bold text-rose-700">⚠️ WARNING: This action will delete uploaded biometric attendance logs from the system database.</p>
+          <p>Please select what scope of logs you wish to clear:</p>
+          <div class="space-y-2 bg-zinc-100 p-3 rounded-xl border border-zinc-300">
+            ${
+              isFiltered
+                ? `
+              <label class="flex items-center gap-2 cursor-pointer font-bold text-zinc-900">
+                <input type="radio" name="clearScope" value="FILTERED" checked class="accent-amber-500" />
+                <span>Clear Current Filtered Subset (${filteredSummaries.length} Records)</span>
+              </label>
+            `
+                : ''
+            }
+            <label class="flex items-center gap-2 cursor-pointer font-bold text-rose-700">
+              <input type="radio" name="clearScope" value="ALL" ${!isFiltered ? 'checked' : ''} class="accent-rose-600" />
+              <span>Clear ALL Uploaded Attendance Logs (${summaries.length} Total Records)</span>
+            </label>
+          </div>
+          <div class="bg-amber-50 border border-amber-200 p-2.5 rounded-lg text-[11px] text-amber-900 font-semibold">
+            🛡️ <strong>Preserved Data:</strong> Employee profiles, work schedules, and approved disputes/CTO records will remain untouched.
+          </div>
+          <p class="font-bold text-zinc-900">Type <span class="text-rose-700 font-mono underline">CLEAR</span> below to confirm deletion:</p>
+        </div>
+      `,
+      input: 'text',
+      inputPlaceholder: 'Type CLEAR to confirm...',
+      showCancelButton: true,
+      confirmButtonText: '🗑️ YES, CLEAR LOGS',
+      confirmButtonColor: '#dc2626',
+      cancelButtonText: 'CANCEL',
+      preConfirm: (inputValue) => {
+        if (inputValue !== 'CLEAR') {
+          Swal.showValidationMessage('Please type CLEAR exactly to confirm deletion.');
+          return false;
+        }
+        const radio = document.querySelector('input[name="clearScope"]:checked') as HTMLInputElement;
+        return radio ? radio.value : 'ALL';
+      },
+    });
+
+    if (result.isConfirmed) {
+      const scope = result.value;
+      try {
+        if (scope === 'FILTERED') {
+          const idsToClear = filteredSummaries.map((s) => s.id);
+          if (onClearSummaries) {
+            await onClearSummaries(idsToClear);
+          }
+          showSuccessAlert('Filtered Logs Cleared', `Successfully cleared ${idsToClear.length} attendance log records.`);
+        } else {
+          if (onClearSummaries) {
+            await onClearSummaries();
+          }
+          showSuccessAlert('All Logs Cleared', `Successfully cleared all ${summaries.length} uploaded attendance logs and biometric punch data.`);
+        }
+      } catch (err) {
+        showErrorAlert('Error Clearing Logs', 'An unexpected error occurred while clearing logs.');
+      }
     }
   };
 
@@ -544,6 +635,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 Upload raw machine punch logs. Automatically validates strict headers, removes duplicates within 60s, and calculates 8-hour Flexi shifts.
               </p>
             </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                id="btn-admin-clear-uploaded-logs-uploader"
+                onClick={handleClearUploadedLogs}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-xs uppercase tracking-wider border border-rose-300 shadow-2xs cursor-pointer transition-colors"
+                title="Clear uploaded biometric logs from system memory"
+              >
+                <Trash2 className="w-4 h-4 text-rose-600" />
+                Clear Uploaded Logs ({summaries.length})
+              </button>
+            </div>
           </div>
 
           {/* Drag & Drop Upload Zone */}
@@ -653,13 +756,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </p>
             </div>
 
-            <button
-              id="btn-admin-request-time-adjustment"
-              onClick={() => setShowAdjustmentModal(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer shrink-0"
-            >
-              <PlusCircle className="w-4 h-4" /> Request Time Adjustment
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                id="btn-admin-clear-uploaded-logs-table"
+                onClick={handleClearUploadedLogs}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-xs uppercase tracking-wider border border-rose-300 shadow-2xs cursor-pointer transition-colors"
+              >
+                <Trash2 className="w-4 h-4 text-rose-600" /> Clear Uploaded Logs
+              </button>
+              <button
+                id="btn-admin-request-time-adjustment"
+                onClick={() => setShowAdjustmentModal(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer shrink-0"
+              >
+                <PlusCircle className="w-4 h-4" /> Request Time Adjustment
+              </button>
+            </div>
           </div>
 
           {/* Professional Date Range Filter Bar */}
@@ -807,6 +919,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       if (!hasClockOut) missingPunches.push('Clock-Out');
                     }
 
+                    const clockInVal = getAdjustedDisplayTime(s, 'firstIn', disputes) || s.firstIn;
+                    const breakOutVal = getAdjustedDisplayTime(s, 'breakOut', disputes) || s.breakOut;
+                    const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
+                    const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
+
                     return (
                       <tr key={s.id} className="hover:bg-gray-50/80 transition-colors">
                         <td className="p-3 font-mono text-[11px] font-bold text-gray-600">
@@ -822,17 +939,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <td className="p-3 text-gray-600 whitespace-nowrap">
                           {s.weekday}
                         </td>
-                        <td className="p-3 font-mono font-semibold text-gray-700 whitespace-nowrap">
-                          {s.firstIn ? formatTime12Hr(s.firstIn) : <span className="text-rose-500 font-bold">No Data</span>}
+                        <td className="p-3 font-mono text-xs whitespace-nowrap">
+                          {isFieldAdjusted(s, 'firstIn', disputes) ? (
+                            <span className="adjusted-time-blinking" title="Clock In Adjusted via Approved Request">
+                              {clockInVal ? formatTime12Hr(clockInVal) : '08:00 AM'}
+                              <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                            </span>
+                          ) : clockInVal ? (
+                            formatTime12Hr(clockInVal)
+                          ) : (
+                            <span className="text-rose-500 font-bold">No Data</span>
+                          )}
                         </td>
-                        <td className="p-3 font-mono text-gray-600 whitespace-nowrap">
-                          {breakTimes.breakOut === '--' || !breakTimes.breakOut || breakTimes.breakOut === 'No Data' ? 'No Data' : breakTimes.breakOut}
+                        <td className="p-3 font-mono text-xs whitespace-nowrap">
+                          {isFieldAdjusted(s, 'breakOut', disputes) ? (
+                            <span className="adjusted-time-blinking" title="Break Out Adjusted via Approved Request">
+                              {breakOutVal ? formatTime12Hr(breakOutVal) : (breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--' ? breakTimes.breakOut : '12:00 PM')}
+                              <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                            </span>
+                          ) : breakOutVal ? (
+                            formatTime12Hr(breakOutVal)
+                          ) : breakTimes.breakOut === '--' || !breakTimes.breakOut || breakTimes.breakOut === 'No Data' ? (
+                            'No Data'
+                          ) : (
+                            breakTimes.breakOut
+                          )}
                         </td>
-                        <td className="p-3 font-mono text-gray-600 whitespace-nowrap">
-                          {breakTimes.breakIn === '--' || !breakTimes.breakIn || breakTimes.breakIn === 'No Data' ? 'No Data' : breakTimes.breakIn}
+                        <td className="p-3 font-mono text-xs whitespace-nowrap">
+                          {isFieldAdjusted(s, 'breakIn', disputes) ? (
+                            <span className="adjusted-time-blinking" title="Break In Adjusted via Approved Request">
+                              {breakInVal ? formatTime12Hr(breakInVal) : (breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--' ? breakTimes.breakIn : '01:00 PM')}
+                              <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                            </span>
+                          ) : breakInVal ? (
+                            formatTime12Hr(breakInVal)
+                          ) : breakTimes.breakIn === '--' || !breakTimes.breakIn || breakTimes.breakIn === 'No Data' ? (
+                            'No Data'
+                          ) : (
+                            breakTimes.breakIn
+                          )}
                         </td>
-                        <td className="p-3 font-mono font-semibold text-gray-700 whitespace-nowrap">
-                          {s.lastOut ? formatTime12Hr(s.lastOut) : <span className="text-rose-500 font-bold">No Data</span>}
+                        <td className="p-3 font-mono text-xs whitespace-nowrap">
+                          {isFieldAdjusted(s, 'lastOut', disputes) ? (
+                            <span className="adjusted-time-blinking" title="Clock Out Adjusted via Approved Request">
+                              {clockOutVal ? formatTime12Hr(clockOutVal) : '05:00 PM'}
+                              <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                            </span>
+                          ) : clockOutVal ? (
+                            formatTime12Hr(clockOutVal)
+                          ) : (
+                            <span className="text-rose-500 font-bold">No Data</span>
+                          )}
                         </td>
                         <td className="p-3 text-center font-mono text-gray-600">
                           {(s.totalBreakMinutes / 60).toFixed(1)}h ({s.totalBreakMinutes}m)
@@ -966,11 +1123,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   Review staff requests, attached proof files, request history, and exact manager approval timestamps.
                 </p>
               </div>
-              {pendingCount > 0 && (
-                <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">
-                  {pendingCount} Pending Approval
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                <button
+                  id="btn-export-pdf-disputes-admin"
+                  onClick={() => exportDisputesToPdf(filteredAdminDisputes, adminDisputeBranchFilter)}
+                  className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-amber-400 font-black text-xs uppercase tracking-wider rounded-xl border border-zinc-950 shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <FileText className="w-4 h-4 text-amber-400" />
+                  Export PDF (4/Page)
+                </button>
+                {pendingCount > 0 && (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                    {pendingCount} Pending Approval
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Filters Row */}
@@ -1336,6 +1503,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
     );
   })()}
+
+      {/* ACTIVITY LOGS TAB */}
+      {(activeTab === 'activity-logs' || activeTab === 'all') && (
+        <ActivityLogsTable
+          activityLogs={activityLogs}
+          onClearActivityLogs={onClearActivityLogs}
+        />
+      )}
 
       {/* ADD / EDIT USER MODAL */}
       {showUserModal && (

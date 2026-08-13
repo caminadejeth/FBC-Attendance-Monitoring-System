@@ -5,10 +5,13 @@ import { ZktecoDatUploader } from './ZktecoDatUploader';
 import { EmployeeDtrSheet } from './EmployeeDtrSheet';
 import { DisputeCardDetails } from './DisputeCardDetails';
 import { WorkScheduleManager } from './WorkScheduleManager';
-import { AttendanceSummaryDaily, CtoManualAdjustment, CtoRequest, User, BiometricPunch, DisputeRequest, WorkSchedule } from '../types';
+import { AttendanceSummaryDaily, CtoManualAdjustment, CtoRequest, User, BiometricPunch, DisputeRequest, WorkSchedule, ActivityLog } from '../types';
+import { ActivityLogsTable } from './ActivityLogsTable';
 import { buildGoogleSheetsData } from '../utils/googleSheetsSync';
 import { getUserCtoStats } from '../utils/ctoHelper';
-import { formatDateMDYY, formatDateMDYYYY, formatDateWithDay, formatTime12Hr, getFilteredSummariesWithAbsents, getBreakTimes, calculateGrossHours } from '../utils/timeFormatters';
+import { formatDateMDYY, formatDateMDYYYY, formatDateWithDay, formatTime12Hr, getFilteredSummariesWithAbsents, getBreakTimes, calculateGrossHours, formatRealtimeTimestamp } from '../utils/timeFormatters';
+import { isFieldAdjusted, getAdjustedDisplayTime } from '../utils/adjustmentHelper';
+import { exportDisputesToPdf } from '../utils/pdfExportHelper';
 import {
   parseAndCleanBiometricExcel,
   generateSampleBiometricExcel,
@@ -72,6 +75,8 @@ interface PayrollDashboardProps {
   onRejectCtoRequest: (id: string, notes?: string) => void;
   onAddCtoManualAdjustment: (adj: Omit<CtoManualAdjustment, 'id' | 'timestamp'>) => void;
   onSyncGoogleSheets: () => void;
+  activityLogs?: ActivityLog[];
+  onClearActivityLogs?: () => void;
   activeTab: string;
 }
 
@@ -93,6 +98,8 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
   onRejectCtoRequest,
   onAddCtoManualAdjustment,
   onSyncGoogleSheets,
+  activityLogs = [],
+  onClearActivityLogs,
   activeTab,
 }) => {
   // File upload state for Payroll department
@@ -494,64 +501,15 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
         </div>
       )}
 
-      {/* PAY PERIOD FILTER & EXPORT BAR */}
+      {/* PAYROLL FILTER & EXPORT TOOLBAR */}
       {activeTab !== 'dtr-logs' && activeTab !== 'schedules' && (
-        <div className="bg-white rounded-2xl border border-[#D3D8C8] p-5 shadow-xs space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <CalendarDays className="w-4 h-4 text-amber-700" />
-              <span className="text-xs font-black uppercase tracking-wider text-zinc-900">
-                Pay Period Range Selection
-              </span>
-            </div>
-
-            {/* Presets */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              {[
-                { id: 'THIS_PAY_PERIOD', label: 'This Pay Period' },
-                { id: 'LAST_15_DAYS', label: 'Last 15 Days' },
-                { id: 'THIS_MONTH', label: 'This Month' },
-                { id: 'ALL', label: 'All Records' },
-              ].map((preset) => (
-                <button
-                  key={preset.id}
-                  onClick={() => handlePresetChange(preset.id)}
-                  className={`px-3 py-1 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
-                    activePreset === preset.id
-                      ? 'bg-amber-400 text-zinc-950 border border-zinc-950 shadow-2xs'
-                      : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 border border-zinc-300'
-                  }`}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 pt-2 border-t border-zinc-200">
-            <div className="flex flex-wrap items-end gap-3 flex-1">
-              <DatePickerInput
-                label="Pay Period Start"
-                value={payPeriodStart}
-                onChange={(val) => {
-                  setPayPeriodStart(val);
-                  setActivePreset('CUSTOM');
-                }}
-              />
-
-              <DatePickerInput
-                label="Pay Period End"
-                value={payPeriodEnd}
-                onChange={(val) => {
-                  setPayPeriodEnd(val);
-                  setActivePreset('CUSTOM');
-                }}
-              />
-
+        <div className="bg-white rounded-2xl border border-[#D3D8C8] p-4 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-3 flex-1">
               <select
                 value={selectedDept}
                 onChange={(e) => setSelectedDept(e.target.value)}
-                className="px-3 py-2 border border-gray-300 rounded-xl text-xs font-bold text-gray-700 bg-white"
+                className="px-3 py-2 border border-gray-300 rounded-xl text-xs font-bold text-gray-700 bg-white focus:ring-2 focus:ring-amber-400 focus:outline-none"
               >
                 <option value="ALL">All Departments</option>
                 {departments.map((d) => (
@@ -561,7 +519,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                 ))}
               </select>
 
-              <div className="relative flex-1 min-w-[180px]">
+              <div className="relative flex-1 min-w-[200px]">
                 <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-3 z-10" />
                 <input
                   type="text"
@@ -573,12 +531,12 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               {onSubmitDispute && (
                 <button
                   id="btn-payroll-request-time-adjustment"
                   onClick={() => setShowAdjustmentModal(true)}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer shrink-0"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer"
                 >
                   <PlusCircle className="w-4 h-4" /> Request Time Adjustment
                 </button>
@@ -718,6 +676,11 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                         if (!hasClockOut) missingPunches.push('Clock-Out');
                       }
 
+                      const clockInVal = getAdjustedDisplayTime(s, 'firstIn', disputes) || s.firstIn;
+                      const breakOutVal = getAdjustedDisplayTime(s, 'breakOut', disputes) || s.breakOut;
+                      const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
+                      const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
+
                       return (
                         <tr key={s.id} className="hover:bg-amber-50/40 transition-colors">
                           <td className="px-2.5 py-2 font-mono text-[11px] font-bold text-gray-600">
@@ -738,25 +701,57 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                           <td className="px-2.5 py-2 text-gray-600 whitespace-nowrap text-[11px]">
                             {s.weekday}
                           </td>
-                          <td className="px-2.5 py-2 font-mono font-semibold text-gray-700 whitespace-nowrap text-[11px]">
-                            {s.firstIn ? formatTime12Hr(s.firstIn) : <span className="text-rose-500 font-bold">No Data</span>}
+                          <td className="px-2.5 py-2 font-mono whitespace-nowrap text-[11px]">
+                            {isFieldAdjusted(s, 'firstIn', disputes) ? (
+                              <span className="adjusted-time-blinking" title="Clock In Adjusted via Approved Request">
+                                {clockInVal ? formatTime12Hr(clockInVal) : '08:00 AM'}
+                                <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                              </span>
+                            ) : clockInVal ? (
+                              formatTime12Hr(clockInVal)
+                            ) : (
+                              <span className="text-rose-500 font-bold">No Data</span>
+                            )}
                           </td>
-                          <td className="px-2.5 py-2 font-mono text-gray-600 whitespace-nowrap text-[11px]">
-                            {breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--' ? (
+                          <td className="px-2.5 py-2 font-mono whitespace-nowrap text-[11px]">
+                            {isFieldAdjusted(s, 'breakOut', disputes) ? (
+                              <span className="adjusted-time-blinking" title="Break Out Adjusted via Approved Request">
+                                {breakOutVal ? formatTime12Hr(breakOutVal) : (breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--' ? breakTimes.breakOut : '12:00 PM')}
+                                <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                              </span>
+                            ) : breakOutVal ? (
+                              formatTime12Hr(breakOutVal)
+                            ) : breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--' ? (
                               breakTimes.breakOut
                             ) : (
                               <span className="font-bold text-gray-400">No Data</span>
                             )}
                           </td>
-                          <td className="px-2.5 py-2 font-mono text-gray-600 whitespace-nowrap text-[11px]">
-                            {breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--' ? (
+                          <td className="px-2.5 py-2 font-mono whitespace-nowrap text-[11px]">
+                            {isFieldAdjusted(s, 'breakIn', disputes) ? (
+                              <span className="adjusted-time-blinking" title="Break In Adjusted via Approved Request">
+                                {breakInVal ? formatTime12Hr(breakInVal) : (breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--' ? breakTimes.breakIn : '01:00 PM')}
+                                <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                              </span>
+                            ) : breakInVal ? (
+                              formatTime12Hr(breakInVal)
+                            ) : breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--' ? (
                               breakTimes.breakIn
                             ) : (
                               <span className="font-bold text-gray-400">No Data</span>
                             )}
                           </td>
-                          <td className="px-2.5 py-2 font-mono font-semibold text-gray-700 whitespace-nowrap text-[11px]">
-                            {s.lastOut ? formatTime12Hr(s.lastOut) : <span className="text-rose-500 font-bold">No Data</span>}
+                          <td className="px-2.5 py-2 font-mono whitespace-nowrap text-[11px]">
+                            {isFieldAdjusted(s, 'lastOut', disputes) ? (
+                              <span className="adjusted-time-blinking" title="Clock Out Adjusted via Approved Request">
+                                {clockOutVal ? formatTime12Hr(clockOutVal) : '05:00 PM'}
+                                <span className="text-[8px] bg-emerald-700 text-white px-1 rounded font-black tracking-tight uppercase">Adj</span>
+                              </span>
+                            ) : clockOutVal ? (
+                              formatTime12Hr(clockOutVal)
+                            ) : (
+                              <span className="text-rose-500 font-bold">No Data</span>
+                            )}
                           </td>
                           <td className="px-2.5 py-2 text-center font-mono text-gray-600 text-[11px]">
                             {s.totalBreakMinutes}m
@@ -1099,7 +1094,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                   <tbody className="divide-y divide-zinc-100">
                     {ctoAdjustments.map((adj) => (
                       <tr key={adj.id} className="hover:bg-zinc-50">
-                        <td className="p-2 font-mono text-[10px] text-zinc-500">{adj.timestamp}</td>
+                        <td className="p-2 font-mono text-[10px] text-zinc-500">{formatRealtimeTimestamp(adj.timestamp)}</td>
                         <td className="p-2 font-bold text-zinc-900">{adj.employeeName} ({adj.employeeId})</td>
                         <td className="p-2">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-black ${adj.type === 'ADDITION' ? 'bg-emerald-100 text-emerald-900' : 'bg-rose-100 text-rose-900'}`}>
@@ -1273,6 +1268,15 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  id="btn-export-pdf-disputes-payroll"
+                  onClick={() => exportDisputesToPdf(filteredList, disputeBranchFilter)}
+                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-amber-400 font-black text-xs uppercase tracking-wider rounded-xl border border-amber-400/50 shadow-md flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <FileText className="w-4 h-4 text-amber-400" />
+                  Export PDF (4/Page)
+                </button>
+
                 <button
                   onClick={() => setShowAdjustmentModal(true)}
                   className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider rounded-xl border border-zinc-950 shadow-md flex items-center gap-1.5 cursor-pointer transition-colors"
@@ -1468,6 +1472,14 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
           </div>
         );
       })()}
+
+      {/* ACTIVITY LOGS TAB */}
+      {(activeTab === 'activity-logs' || activeTab === 'all') && (
+        <ActivityLogsTable
+          activityLogs={activityLogs}
+          onClearActivityLogs={onClearActivityLogs}
+        />
+      )}
 
       {/* Time Adjustment Modal for Payroll */}
       {onSubmitDispute && (

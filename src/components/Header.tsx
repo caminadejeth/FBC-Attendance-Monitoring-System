@@ -1,6 +1,6 @@
 import React from 'react';
 import { User, UserRole } from '../types';
-import { LogOut, Shield, UserCheck, Calculator, RefreshCw, FileSpreadsheet } from 'lucide-react';
+import { LogOut, Shield, UserCheck, FileSpreadsheet } from 'lucide-react';
 import { YellowCabPlateLogo, YellowCabCheckerboard } from './YellowCabBrand';
 
 interface HeaderProps {
@@ -84,8 +84,8 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           {/* Action Tools & User Profile */}
-          <div className="flex items-center space-x-3">
-            <div className="flex items-center space-x-2 pl-2 border-l border-zinc-700">
+          <div className="flex items-center space-x-2 sm:space-x-3">
+            <div className="flex items-center space-x-2">
               {currentUser.avatarUrl ? (
                 <img
                   src={currentUser.avatarUrl}

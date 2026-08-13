@@ -119,7 +119,7 @@ export const TimeAdjustmentModal: React.FC<TimeAdjustmentModalProps> = ({
       finalReqOut = requestedTimeOut;
     }
 
-    onSubmitDispute({
+    const disputePayload: Omit<DisputeRequest, 'id' | 'status' | 'submittedAt'> = {
       employeeId: selectedEmpId,
       employeeName: targetUser?.name || 'Employee',
       department: targetUser?.department || 'Operations',
@@ -127,14 +127,17 @@ export const TimeAdjustmentModal: React.FC<TimeAdjustmentModalProps> = ({
       type: category,
       category: category,
       reason: reason.trim(),
-      requestedClockIn: finalReqIn,
-      requestedClockOut: finalReqOut,
-      requestedBreakOut: finalReqBreakOut,
-      requestedBreakIn: finalReqBreakIn,
-      requestedHours: category === 'Full Shift' ? Number(requestedHours) : undefined,
-      attachmentName: attachmentName || undefined,
-      attachmentUrl: attachmentUrl || undefined,
-    });
+    };
+
+    if (finalReqIn) disputePayload.requestedClockIn = finalReqIn;
+    if (finalReqOut) disputePayload.requestedClockOut = finalReqOut;
+    if (finalReqBreakOut) disputePayload.requestedBreakOut = finalReqBreakOut;
+    if (finalReqBreakIn) disputePayload.requestedBreakIn = finalReqBreakIn;
+    if (category === 'Full Shift' && requestedHours) disputePayload.requestedHours = Number(requestedHours);
+    if (attachmentName) disputePayload.attachmentName = attachmentName;
+    if (attachmentUrl) disputePayload.attachmentUrl = attachmentUrl;
+
+    onSubmitDispute(disputePayload);
 
     showSuccessAlert(
       'Time Adjustment Request Submitted!',

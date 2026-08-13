@@ -6,6 +6,31 @@ const getStorageKey = (colName: string) => {
   return `fbc_${colName}`;
 };
 
+const getDeletedKey = (colName: string) => `fbc_deleted_${colName}`;
+
+export function getDeletedIds(colName: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(getDeletedKey(colName));
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr);
+    }
+  } catch (e) {
+    console.error(`Failed loading deleted IDs for ${colName}`, e);
+  }
+  return new Set();
+}
+
+export function recordDeletedId(colName: string, id: string) {
+  try {
+    const deletedSet = getDeletedIds(colName);
+    deletedSet.add(id);
+    localStorage.setItem(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)));
+  } catch (e) {
+    console.error(`Failed recording deleted ID for ${colName}`, e);
+  }
+}
+
 export function subscribeCollection<T extends { id: string }>(
   collectionName: string,
   initialData: T[],
@@ -13,22 +38,35 @@ export function subscribeCollection<T extends { id: string }>(
 ) {
   const colRef = collection(db, collectionName);
   const storageKey = getStorageKey(collectionName);
+  const seededKey = `fbc_seeded_${collectionName}`;
 
   return onSnapshot(
     colRef,
     async (snapshot) => {
+      const deletedSet = getDeletedIds(collectionName);
+
       if (snapshot.empty) {
-        // If Firestore collection is empty, check if we have cached local data
+        const isSeeded = localStorage.getItem(seededKey);
+        if (isSeeded) {
+          // Collection was already initialized; empty means intentionally empty!
+          localStorage.setItem(storageKey, JSON.stringify([]));
+          onUpdate([]);
+          return;
+        }
+
+        // If not seeded yet, check if we have cached local data
         const cached = localStorage.getItem(storageKey);
         if (cached) {
           try {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed) && parsed.length > 0) {
-              onUpdate(parsed);
+              const filtered = parsed.filter((item) => !deletedSet.has(item.id));
+              localStorage.setItem(seededKey, 'true');
+              onUpdate(filtered);
               // Seed cached items to firestore so cloud is populated
-              for (const item of parsed) {
+              for (const item of filtered) {
                 try {
-                  await setDoc(doc(db, collectionName, item.id), item, { merge: true });
+                  await setDoc(doc(db, collectionName, item.id), cleanUndefined(item), { merge: true });
                 } catch (e) {
                   console.error(`Error syncing cached item to ${collectionName}:`, e);
                 }
@@ -41,25 +79,33 @@ export function subscribeCollection<T extends { id: string }>(
         }
 
         // If no cache and initial default data exists, seed once
-        if (initialData.length > 0) {
-          for (const item of initialData) {
+        const validInitial = initialData.filter((item) => !deletedSet.has(item.id));
+        if (validInitial.length > 0) {
+          localStorage.setItem(seededKey, 'true');
+          for (const item of validInitial) {
             try {
-              await setDoc(doc(db, collectionName, item.id), item, { merge: true });
+              await setDoc(doc(db, collectionName, item.id), cleanUndefined(item), { merge: true });
             } catch (e) {
               console.error(`Error seeding ${collectionName}:`, e);
             }
           }
           try {
-            localStorage.setItem(storageKey, JSON.stringify(initialData));
+            localStorage.setItem(storageKey, JSON.stringify(validInitial));
           } catch (e) {
             console.error(e);
           }
-          onUpdate(initialData);
+          onUpdate(validInitial);
         } else {
+          localStorage.setItem(seededKey, 'true');
+          localStorage.setItem(storageKey, JSON.stringify([]));
           onUpdate([]);
         }
       } else {
-        const items: T[] = snapshot.docs.map((docSnap) => docSnap.data() as T);
+        localStorage.setItem(seededKey, 'true');
+        const items: T[] = snapshot.docs
+          .map((docSnap) => docSnap.data() as T)
+          .filter((item) => !deletedSet.has(item.id));
+
         try {
           localStorage.setItem(storageKey, JSON.stringify(items));
         } catch (err) {
@@ -70,22 +116,40 @@ export function subscribeCollection<T extends { id: string }>(
     },
     (error) => {
       console.error(`Firestore error on ${collectionName}:`, error);
-      // Fallback to localStorage instead of resetting to initial default mock data
+      const deletedSet = getDeletedIds(collectionName);
       const cached = localStorage.getItem(storageKey);
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed)) {
-            onUpdate(parsed);
+            const filtered = parsed.filter((item) => !deletedSet.has(item.id));
+            onUpdate(filtered);
             return;
           }
         } catch (e) {
           console.error(`Failed loading fallback cache for ${storageKey}`, e);
         }
       }
-      onUpdate(initialData);
+      const validInitial = initialData.filter((item) => !deletedSet.has(item.id));
+      onUpdate(validInitial);
     }
   );
+}
+
+export function cleanUndefined<T>(obj: T): T {
+  if (obj === null || obj === undefined || typeof obj !== 'object') {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(cleanUndefined) as unknown as T;
+  }
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      cleaned[key] = cleanUndefined(value);
+    }
+  }
+  return cleaned as T;
 }
 
 export async function saveDocument<T extends { id: string }>(
@@ -93,7 +157,8 @@ export async function saveDocument<T extends { id: string }>(
   item: T
 ) {
   try {
-    await setDoc(doc(db, collectionName, item.id), item, { merge: true });
+    const cleanedItem = cleanUndefined(item);
+    await setDoc(doc(db, collectionName, item.id), cleanedItem, { merge: true });
   } catch (error) {
     console.error(`Error saving to ${collectionName}:`, error);
   }
@@ -109,6 +174,21 @@ export async function saveDocuments<T extends { id: string }>(
 }
 
 export async function removeDocument(collectionName: string, id: string) {
+  recordDeletedId(collectionName, id);
+  const storageKey = getStorageKey(collectionName);
+  try {
+    const cached = localStorage.getItem(storageKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed)) {
+        const filtered = parsed.filter((item: any) => item.id !== id);
+        localStorage.setItem(storageKey, JSON.stringify(filtered));
+      }
+    }
+  } catch (e) {
+    console.error(`Error deleting from cache for ${collectionName}:`, e);
+  }
+
   try {
     await deleteDoc(doc(db, collectionName, id));
   } catch (error) {

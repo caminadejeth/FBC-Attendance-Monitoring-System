@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
+  ActivityActionType,
+  ActivityLog,
   AttendanceStatus,
   AttendanceSummaryDaily,
   BiometricPunch,
@@ -24,6 +26,7 @@ import {
   INITIAL_CTO_REQUESTS,
   INITIAL_CTO_ADJUSTMENTS,
   INITIAL_SCHEDULES,
+  INITIAL_ACTIVITY_LOGS,
 } from './data/mockData';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
@@ -81,6 +84,9 @@ export default function App() {
   const [ctoAdjustments, setCtoAdjustments] = useState<CtoManualAdjustment[]>(() =>
     loadFromStorage<CtoManualAdjustment[]>('fbc_cto_adjustments', INITIAL_CTO_ADJUSTMENTS)
   );
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>(() =>
+    loadFromStorage<ActivityLog[]>('fbc_activity_logs', INITIAL_ACTIVITY_LOGS)
+  );
 
   // Real-Time Firebase Firestore Cloud Database Subscriptions across all devices/users
   useEffect(() => {
@@ -91,6 +97,7 @@ export default function App() {
     const unsubSchedules = subscribeCollection('schedules', INITIAL_SCHEDULES, setSchedules);
     const unsubCtoReq = subscribeCollection('ctoRequests', INITIAL_CTO_REQUESTS, setCtoRequests);
     const unsubCtoAdj = subscribeCollection('ctoAdjustments', INITIAL_CTO_ADJUSTMENTS, setCtoAdjustments);
+    const unsubActivity = subscribeCollection('activityLogs', INITIAL_ACTIVITY_LOGS, setActivityLogs);
 
     return () => {
       unsubUsers();
@@ -100,8 +107,39 @@ export default function App() {
       unsubSchedules();
       unsubCtoReq();
       unsubCtoAdj();
+      unsubActivity();
     };
   }, []);
+
+  // System Activity Logger Helper
+  const logActivity = (
+    actionType: ActivityActionType,
+    details: string,
+    actionCategory: string = 'System'
+  ) => {
+    const newLog: ActivityLog = {
+      id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      userName: currentUser?.name || 'System Administrator',
+      userRole: currentUser?.role || 'ADMIN',
+      userEmail: currentUser?.email,
+      actionType,
+      actionCategory,
+      details,
+    };
+
+    setActivityLogs((prev) => [newLog, ...prev]);
+    saveDocument('activityLogs', newLog);
+  };
+
+  const handleClearActivityLogs = () => {
+    setActivityLogs([]);
+    try {
+      localStorage.removeItem('fbc_activity_logs');
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Sync current logged-in user session to localStorage
   useEffect(() => {
@@ -134,6 +172,7 @@ export default function App() {
 
   const handleSaveSchedule = (updatedSchedule: WorkSchedule) => {
     saveDocument('schedules', updatedSchedule);
+    logActivity('SCHEDULE_UPDATE', `Updated work schedule roster for ${updatedSchedule.employeeName} (${updatedSchedule.shiftName}).`, 'Schedules');
     setSchedules((prev) => {
       const idx = prev.findIndex(
         (s) =>
@@ -193,6 +232,7 @@ export default function App() {
   // Handle uploaded biometric file processing
   const handleUploadProcessed = (newSummaries: AttendanceSummaryDaily[]) => {
     saveDocuments('summaries', newSummaries);
+    logActivity('BIOMETRIC_UPLOAD', `Uploaded and processed ${newSummaries.length} biometric attendance summary logs.`, 'Biometrics');
     setSummaries((prev) => {
       const map = new Map<string, AttendanceSummaryDaily>();
       prev.forEach((s) => map.set(`${s.employeeId}_${s.date}`, s));
@@ -207,11 +247,13 @@ export default function App() {
     adminNotes: string,
     approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN'
   ) => {
-    const currentNow = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const currentNow = new Date().toISOString();
     const role =
       approverRole ||
       (currentUser?.role === 'BRANCH_MANAGER' || currentUser?.role === 'SHIFT_MANAGER'
         ? 'MANAGER'
+        : currentUser?.role === 'ADMIN'
+        ? 'ADMIN'
         : 'PAYROLL');
 
     let isFullyApproved = false;
@@ -223,22 +265,27 @@ export default function App() {
         if (d.id !== disputeId) return d;
 
         const isMgr = role === 'MANAGER';
-        const isPay = role === 'PAYROLL' || role === 'ADMIN';
+        const isPay = role === 'PAYROLL';
+        const isAdmin = role === 'ADMIN' || currentUser?.role === 'ADMIN';
 
-        const updatedMgrApp = isMgr ? true : Boolean(d.managerApproved);
+        const updatedMgrApp = isMgr || isAdmin ? true : Boolean(d.managerApproved);
         const updatedMgrBy = isMgr
           ? currentUser?.name || 'Branch Manager'
+          : isAdmin
+          ? `${currentUser?.name || 'System Admin'} (Admin)`
           : d.managerApprovedBy || (d.status === 'APPROVED' ? d.reviewedBy : undefined);
-        const updatedMgrAt = isMgr ? currentNow : d.managerApprovedAt;
+        const updatedMgrAt = (isMgr || isAdmin) ? (d.managerApprovedAt || currentNow) : d.managerApprovedAt;
 
-        const updatedPayApp = isPay ? true : Boolean(d.payrollApproved);
+        const updatedPayApp = isPay || isAdmin ? true : Boolean(d.payrollApproved);
         const updatedPayBy = isPay
           ? currentUser?.name || 'Payroll Department'
+          : isAdmin
+          ? `${currentUser?.name || 'System Admin'} (Admin)`
           : d.payrollApprovedBy;
-        const updatedPayAt = isPay ? currentNow : d.payrollApprovedAt;
+        const updatedPayAt = (isPay || isAdmin) ? (d.payrollApprovedAt || currentNow) : d.payrollApprovedAt;
 
         // Fully approved if both approved, OR if done by ADMIN
-        const fullyApproved = (updatedMgrApp && updatedPayApp) || (isPay && role === 'ADMIN');
+        const fullyApproved = (updatedMgrApp && updatedPayApp) || isAdmin;
         if (fullyApproved) {
           isFullyApproved = true;
         }
@@ -253,7 +300,7 @@ export default function App() {
           adminNotes: adminNotes || d.adminNotes,
           reviewedBy: approvers.join(' & ') || currentUser?.name || 'Authorized Approver',
           reviewedAt: currentNow,
-          approvedAt: fullyApproved ? currentNow : d.approvedAt,
+          approvedAt: fullyApproved ? (d.approvedAt || currentNow) : d.approvedAt,
           managerApproved: updatedMgrApp,
           managerApprovedBy: updatedMgrBy,
           managerApprovedAt: updatedMgrAt,
@@ -270,6 +317,12 @@ export default function App() {
 
     if (updatedDisputeItem) {
       saveDocument('disputes', updatedDisputeItem);
+      const d: DisputeRequest = updatedDisputeItem;
+      logActivity(
+        d.status === 'APPROVED' ? 'DISPUTE_APPROVAL' : 'SYSTEM_EVENT',
+        `${d.status === 'APPROVED' ? 'Approved' : 'Updated approval status for'} dispute for ${d.employeeName} (${d.category || d.type} on ${d.date}).`,
+        'Disputes'
+      );
     }
 
     // Recalculate DTR Attendance summary ONLY when fully approved by BOTH or ADMIN
@@ -285,24 +338,34 @@ export default function App() {
         (s) => s.employeeId === targetDispute.employeeId && parseToYYYYMMDD(s.date) === targetDate
       );
 
-      const cat = targetDispute.category || targetDispute.type;
+      const cat = (targetDispute.category || targetDispute.type || '').toLowerCase();
 
       let reqIn = existingSummary?.firstIn || '';
       let reqOut = existingSummary?.lastOut || '';
       let reqBreakOut = existingSummary?.breakOut || '';
       let reqBreakIn = existingSummary?.breakIn || '';
+      const newlyAdjustedFields: string[] = [];
 
-      if (cat === 'Time-in') {
+      const isTimeInCat = cat.includes('time-in') || cat.includes('time_in') || cat.includes('time in') || cat.includes('full shift') || cat.includes('full_shift');
+      const isTimeOutCat = cat.includes('time-out') || cat.includes('time_out') || cat.includes('time out') || cat.includes('full shift') || cat.includes('full_shift');
+      const isBreakOutCat = cat.includes('break-out') || cat.includes('break_out') || cat.includes('break out');
+      const isBreakInCat = cat.includes('break-in') || cat.includes('break_in') || cat.includes('break in');
+
+      if (targetDispute.requestedClockIn || isTimeInCat) {
         reqIn = targetDispute.requestedClockIn || reqIn || '08:00:00';
-      } else if (cat === 'Time-out') {
+        newlyAdjustedFields.push('firstIn');
+      }
+      if (targetDispute.requestedClockOut || isTimeOutCat) {
         reqOut = targetDispute.requestedClockOut || reqOut || '17:00:00';
-      } else if (cat === 'Break-out') {
+        newlyAdjustedFields.push('lastOut');
+      }
+      if (targetDispute.requestedBreakOut || isBreakOutCat) {
         reqBreakOut = targetDispute.requestedBreakOut || reqBreakOut;
-      } else if (cat === 'Break-in') {
+        newlyAdjustedFields.push('breakOut');
+      }
+      if (targetDispute.requestedBreakIn || isBreakInCat) {
         reqBreakIn = targetDispute.requestedBreakIn || reqBreakIn;
-      } else if (cat === 'Full Shift') {
-        reqIn = targetDispute.requestedClockIn || reqIn || '08:00:00';
-        reqOut = targetDispute.requestedClockOut || reqOut || '17:00:00';
+        newlyAdjustedFields.push('breakIn');
       }
 
       let reqHours = 0;
@@ -331,6 +394,9 @@ export default function App() {
         const updated = prev.map((s) => {
           if (s.employeeId === targetDispute.employeeId && parseToYYYYMMDD(s.date) === targetDate) {
             found = true;
+            const combinedFields = Array.from(
+              new Set([...(s.adjustedFields || []), ...newlyAdjustedFields])
+            );
             const item: AttendanceSummaryDaily = {
               ...s,
               status: finalStatus,
@@ -344,6 +410,7 @@ export default function App() {
               anomalies: [reasonNote],
               isAdjusted: true,
               adjustmentNote: targetDispute.reason,
+              adjustedFields: combinedFields,
             };
             updatedSummaryItem = item;
             return item;
@@ -375,6 +442,7 @@ export default function App() {
             punches: [],
             isAdjusted: true,
             adjustmentNote: targetDispute.reason,
+            adjustedFields: newlyAdjustedFields,
           };
           updatedSummaryItem = newSummary;
           return [newSummary, ...prev];
@@ -412,6 +480,12 @@ export default function App() {
     );
     if (updatedDisputeItem) {
       saveDocument('disputes', updatedDisputeItem);
+      const d: DisputeRequest = updatedDisputeItem;
+      logActivity(
+        'DISPUTE_REJECTION',
+        `Rejected dispute for ${d.employeeName} (${d.category || d.type} on ${d.date}).`,
+        'Disputes'
+      );
     }
   };
 
@@ -423,9 +497,14 @@ export default function App() {
       ...newDispute,
       id: `disp-${Date.now()}`,
       status: 'PENDING',
-      submittedAt: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      submittedAt: new Date().toISOString(),
     };
     saveDocument('disputes', dispute);
+    logActivity(
+      'DISPUTE_FILING',
+      `Submitted dispute request for ${dispute.employeeName} (${dispute.category || dispute.type} on ${dispute.date}).`,
+      'Disputes'
+    );
     setDisputes((prev) => [dispute, ...prev]);
   };
 
@@ -439,14 +518,14 @@ export default function App() {
       status: 'PENDING',
       managerApproved: false,
       payrollApproved: false,
-      submittedAt: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      submittedAt: new Date().toISOString(),
     };
     saveDocument('ctoRequests', req);
     setCtoRequests((prev) => [req, ...prev]);
   };
 
   const handleApproveCtoRequest = (id: string, notes?: string, approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => {
-    const currentNow = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const currentNow = new Date().toISOString();
     const role = approverRole || (currentUser?.role === 'BRANCH_MANAGER' || currentUser?.role === 'SHIFT_MANAGER' ? 'MANAGER' : 'PAYROLL');
 
     let approvedReq: CtoRequest | null = null;
@@ -600,33 +679,77 @@ export default function App() {
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
     };
     saveDocument('ctoAdjustments', record);
+    logActivity(
+      'CTO_ADJUSTMENT',
+      `Manual CTO adjustment of ${adj.amount > 0 ? '+' : ''}${adj.amount}h for ${adj.employeeName || 'ID ' + adj.employeeId}. Reason: ${adj.reason}`,
+      'Adjustments'
+    );
     setCtoAdjustments((prev) => [record, ...prev]);
   };
 
   // Add / Edit User handlers
   const handleAddUser = (newUser: User) => {
     saveDocument('users', newUser);
+    logActivity('USER_MANAGEMENT', `Created staff account for ${newUser.name} (${newUser.employeeId}).`, 'Users');
     setUsers((prev) => [...prev, newUser]);
   };
 
   const handleUpdateUser = (updatedUser: User) => {
     saveDocument('users', updatedUser);
+    logActivity('USER_MANAGEMENT', `Updated employee profile for ${updatedUser.name} (${updatedUser.employeeId}).`, 'Users');
     setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
   };
 
   const handleDeleteUser = (userId: string) => {
+    const target = users.find((u) => u.id === userId);
     removeDocument('users', userId);
+    logActivity('USER_MANAGEMENT', `Deleted user account ${target ? target.name + ' (' + target.employeeId + ')' : 'ID ' + userId}.`, 'Users');
     setUsers((prev) => prev.filter((u) => u.id !== userId));
   };
 
   const handleDeleteDispute = (disputeId: string) => {
+    setDisputes((prev) => {
+      const updated = prev.filter((d) => d.id !== disputeId);
+      try {
+        localStorage.setItem('fbc_disputes', JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return updated;
+    });
     removeDocument('disputes', disputeId);
-    setDisputes((prev) => prev.filter((d) => d.id !== disputeId));
   };
 
   const handleDeleteSummary = (summaryId: string) => {
     removeDocument('summaries', summaryId);
     setSummaries((prev) => prev.filter((s) => s.id !== summaryId));
+  };
+
+  const handleClearSummaries = async (summaryIdsToClear?: string[]) => {
+    if (summaryIdsToClear && summaryIdsToClear.length > 0) {
+      const idsSet = new Set(summaryIdsToClear);
+      for (const id of summaryIdsToClear) {
+        await removeDocument('summaries', id);
+      }
+      logActivity('DATA_CLEAR', `Cleared ${summaryIdsToClear.length} selected biometric summary records.`, 'Data Clear');
+      setSummaries((prev) => prev.filter((s) => !idsSet.has(s.id)));
+    } else {
+      for (const s of summaries) {
+        await removeDocument('summaries', s.id);
+      }
+      for (const p of punches) {
+        await removeDocument('punches', p.id);
+      }
+      logActivity('DATA_CLEAR', `Cleared all biometric summary logs (${summaries.length} entries) and punch logs from system.`, 'Data Clear');
+      setSummaries([]);
+      setPunches([]);
+      try {
+        localStorage.removeItem('fbc_summaries');
+        localStorage.removeItem('fbc_punches');
+      } catch (e) {
+        console.error(e);
+      }
+    }
   };
 
   const handleDeleteCtoRequest = (ctoId: string) => {
@@ -669,11 +792,17 @@ export default function App() {
           icon: '👑',
         };
       case 'SHIFT_MANAGER':
+        return {
+          title: 'SHIFT MANAGER ATTENDANCE PORTAL',
+          subtitle: 'Personal Punch Records • 8-Hour Daily Progress • Shift Breakdown • Dispute Filing',
+          badge: 'ROLE: SHIFT MANAGER',
+          icon: '👤',
+        };
       case 'BRANCH_MANAGER':
         return {
-          title: 'STORE OPERATIONS & SHIFT MANAGER PORTAL',
-          subtitle: 'Store Operations • Biometric ZKTeco File Uploads • Dispute Filing & Shift Monitoring',
-          badge: role === 'SHIFT_MANAGER' ? 'ROLE: SHIFT MANAGER' : 'ROLE: BRANCH MANAGER',
+          title: 'STORE OPERATIONS PORTAL',
+          subtitle: 'Store Operations • Biometric ZKTeco File Uploads • Dispute Approvals & Shift Monitoring',
+          badge: 'ROLE: BRANCH MANAGER',
           icon: '🏪',
         };
       case 'PAYROLL':
@@ -699,9 +828,9 @@ export default function App() {
     activeTab === 'overview' ||
     activeTab === 'dashboard' ||
     (currentUser?.role === 'ADMIN' && (activeTab === 'overview' || activeTab === 'logs')) ||
-    ((currentUser?.role === 'BRANCH_MANAGER' || currentUser?.role === 'SHIFT_MANAGER') && activeTab === 'branch-logs') ||
+    (currentUser?.role === 'BRANCH_MANAGER' && activeTab === 'branch-logs') ||
     (currentUser?.role === 'PAYROLL' && (activeTab === 'dtr-logs' || activeTab === 'daily-logs')) ||
-    (currentUser?.role === 'STAFF' && activeTab === 'my-punches');
+    ((currentUser?.role === 'STAFF' || currentUser?.role === 'SHIFT_MANAGER') && activeTab === 'my-punches');
 
   return (
     <div className="min-h-screen bg-[#FAF9F5] text-zinc-900 flex flex-col font-sans">
@@ -785,13 +914,16 @@ export default function App() {
                 onDeleteUser={handleDeleteUser}
                 onDeleteDispute={handleDeleteDispute}
                 onDeleteSummary={handleDeleteSummary}
+                onClearSummaries={handleClearSummaries}
                 onDeleteCtoRequest={handleDeleteCtoRequest}
                 onSyncGoogleSheets={handleSyncGoogleSheets}
+                activityLogs={activityLogs}
+                onClearActivityLogs={handleClearActivityLogs}
                 activeTab={activeTab}
               />
             )}
 
-            {currentUser.role === 'STAFF' && (
+            {(currentUser.role === 'STAFF' || currentUser.role === 'SHIFT_MANAGER') && (
               <StaffDashboard
                 currentUser={currentUser}
                 users={users}
@@ -803,11 +935,13 @@ export default function App() {
                 onUpdateSummaryAnomaly={handleUpdateSummaryAnomaly}
                 onSubmitDispute={handleSubmitDispute}
                 onSubmitCtoRequest={handleSubmitCtoRequest}
+                activityLogs={activityLogs}
+                onClearActivityLogs={handleClearActivityLogs}
                 activeTab={activeTab}
               />
             )}
 
-            {(currentUser.role === 'BRANCH_MANAGER' || currentUser.role === 'SHIFT_MANAGER') && (
+            {currentUser.role === 'BRANCH_MANAGER' && (
               <ManagerDashboard
                 currentUser={currentUser}
                 users={users}
@@ -827,6 +961,8 @@ export default function App() {
                 onApproveCtoRequest={handleApproveCtoRequest}
                 onRejectCtoRequest={handleRejectCtoRequest}
                 onSyncGoogleSheets={handleSyncGoogleSheets}
+                activityLogs={activityLogs}
+                onClearActivityLogs={handleClearActivityLogs}
                 activeTab={activeTab}
               />
             )}
@@ -850,6 +986,8 @@ export default function App() {
                 onRejectCtoRequest={handleRejectCtoRequest}
                 onAddCtoManualAdjustment={handleAddCtoManualAdjustment}
                 onSyncGoogleSheets={handleSyncGoogleSheets}
+                activityLogs={activityLogs}
+                onClearActivityLogs={handleClearActivityLogs}
                 activeTab={activeTab}
               />
             )}
