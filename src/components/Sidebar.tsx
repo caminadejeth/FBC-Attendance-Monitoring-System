@@ -254,12 +254,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             icon: Award,
             description: 'Compensatory Time Off balance & leave requests',
           },
-          {
-            id: 'activity-logs',
-            label: 'Activity Log',
-            icon: History,
-            description: 'Audit history of actions & branch activity',
-          },
         ];
 
       case 'PAYROLL':
@@ -309,12 +303,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             badge: pendingCtoCount > 0 ? pendingCtoCount : undefined,
             description: 'Compensatory Time Off approval',
           },
-          {
-            id: 'activity-logs',
-            label: 'Activity Log',
-            icon: History,
-            description: 'Audit history of actions & data changes',
-          },
         ];
 
       case 'SHIFT_MANAGER':
@@ -344,12 +332,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             label: 'CTO Leave Requests',
             icon: Award,
             description: 'Compensatory Time Off balance & leave requests',
-          },
-          {
-            id: 'activity-logs',
-            label: 'Activity Log',
-            icon: History,
-            description: 'Audit history of actions & personal activity',
           },
         ];
     }

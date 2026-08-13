@@ -214,6 +214,17 @@ export default function App() {
   // Navigation Tab State
   const [activeTab, setActiveTab] = useState<string>('overview');
 
+  // Security guard: Only ADMIN role can access activity-logs
+  useEffect(() => {
+    if (currentUser && currentUser.role !== 'ADMIN' && activeTab === 'activity-logs') {
+      if (currentUser.role === 'BRANCH_MANAGER' || currentUser.role === 'PAYROLL') {
+        setActiveTab('dtr-logs');
+      } else {
+        setActiveTab('my-punches');
+      }
+    }
+  }, [currentUser, activeTab]);
+
   // Login handler
   const handleLoginSuccess = (user: User) => {
     setCurrentUser(user);
@@ -246,7 +257,7 @@ export default function App() {
   };
 
   // Handle Dispute Approvals & Hours Recalculation (Dual Approval)
-  const handleApproveDispute = (
+  const handleApproveDispute = async (
     disputeId: string,
     adminNotes: string,
     approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN'
@@ -260,89 +271,77 @@ export default function App() {
         ? 'ADMIN'
         : 'PAYROLL');
 
-    let isFullyApproved = false;
-    let targetDisputeToProcess: DisputeRequest | null = null;
-    let updatedDisputeItem: DisputeRequest | null = null;
+    const targetDispute = disputes.find((d) => d.id === disputeId);
+    if (!targetDispute) return;
+
+    const isMgr = role === 'MANAGER';
+    const isPay = role === 'PAYROLL';
+    const isAdmin = role === 'ADMIN' || currentUser?.role === 'ADMIN';
+
+    const updatedMgrApp = isMgr || isAdmin ? true : Boolean(targetDispute.managerApproved);
+    const updatedMgrBy = isMgr
+      ? currentUser?.name || 'Branch Manager'
+      : isAdmin
+      ? `${currentUser?.name || 'System Admin'} (Admin)`
+      : targetDispute.managerApprovedBy || (targetDispute.status === 'APPROVED' ? targetDispute.reviewedBy : undefined);
+    const updatedMgrAt = (isMgr || isAdmin) ? (targetDispute.managerApprovedAt || currentNow) : targetDispute.managerApprovedAt;
+
+    const updatedPayApp = isPay || isAdmin ? true : Boolean(targetDispute.payrollApproved);
+    const updatedPayBy = isPay
+      ? currentUser?.name || 'Payroll Department'
+      : isAdmin
+      ? `${currentUser?.name || 'System Admin'} (Admin)`
+      : targetDispute.payrollApprovedBy;
+    const updatedPayAt = (isPay || isAdmin) ? (targetDispute.payrollApprovedAt || currentNow) : targetDispute.payrollApprovedAt;
+
+    // Fully approved if both approved, OR if done by ADMIN
+    const fullyApproved = (updatedMgrApp && updatedPayApp) || isAdmin;
+
+    const approvers: string[] = [];
+    if (updatedMgrApp) approvers.push(`Branch Manager (${updatedMgrBy || 'Manager'})`);
+    if (updatedPayApp) approvers.push(`Payroll (${updatedPayBy || 'Payroll'})`);
+
+    const updatedDisputeItem: DisputeRequest = {
+      ...targetDispute,
+      status: fullyApproved ? 'APPROVED' : 'PENDING',
+      adminNotes: adminNotes || targetDispute.adminNotes,
+      reviewedBy: approvers.join(' & ') || currentUser?.name || 'Authorized Approver',
+      reviewedAt: currentNow,
+      approvedAt: fullyApproved ? (targetDispute.approvedAt || currentNow) : targetDispute.approvedAt,
+      managerApproved: updatedMgrApp,
+      managerApprovedBy: updatedMgrBy,
+      managerApprovedAt: updatedMgrAt,
+      payrollApproved: updatedPayApp,
+      payrollApprovedBy: updatedPayBy,
+      payrollApprovedAt: updatedPayAt,
+    };
+
+    // Save updated dispute directly to Firestore
+    await saveDocument('disputes', updatedDisputeItem);
 
     setDisputes((prev) =>
-      prev.map((d) => {
-        if (d.id !== disputeId) return d;
-
-        const isMgr = role === 'MANAGER';
-        const isPay = role === 'PAYROLL';
-        const isAdmin = role === 'ADMIN' || currentUser?.role === 'ADMIN';
-
-        const updatedMgrApp = isMgr || isAdmin ? true : Boolean(d.managerApproved);
-        const updatedMgrBy = isMgr
-          ? currentUser?.name || 'Branch Manager'
-          : isAdmin
-          ? `${currentUser?.name || 'System Admin'} (Admin)`
-          : d.managerApprovedBy || (d.status === 'APPROVED' ? d.reviewedBy : undefined);
-        const updatedMgrAt = (isMgr || isAdmin) ? (d.managerApprovedAt || currentNow) : d.managerApprovedAt;
-
-        const updatedPayApp = isPay || isAdmin ? true : Boolean(d.payrollApproved);
-        const updatedPayBy = isPay
-          ? currentUser?.name || 'Payroll Department'
-          : isAdmin
-          ? `${currentUser?.name || 'System Admin'} (Admin)`
-          : d.payrollApprovedBy;
-        const updatedPayAt = (isPay || isAdmin) ? (d.payrollApprovedAt || currentNow) : d.payrollApprovedAt;
-
-        // Fully approved if both approved, OR if done by ADMIN
-        const fullyApproved = (updatedMgrApp && updatedPayApp) || isAdmin;
-        if (fullyApproved) {
-          isFullyApproved = true;
-        }
-
-        const approvers: string[] = [];
-        if (updatedMgrApp) approvers.push(`Branch Manager (${updatedMgrBy || 'Manager'})`);
-        if (updatedPayApp) approvers.push(`Payroll (${updatedPayBy || 'Payroll'})`);
-
-        const item: DisputeRequest = {
-          ...d,
-          status: fullyApproved ? 'APPROVED' : 'PENDING',
-          adminNotes: adminNotes || d.adminNotes,
-          reviewedBy: approvers.join(' & ') || currentUser?.name || 'Authorized Approver',
-          reviewedAt: currentNow,
-          approvedAt: fullyApproved ? (d.approvedAt || currentNow) : d.approvedAt,
-          managerApproved: updatedMgrApp,
-          managerApprovedBy: updatedMgrBy,
-          managerApprovedAt: updatedMgrAt,
-          payrollApproved: updatedPayApp,
-          payrollApprovedBy: updatedPayBy,
-          payrollApprovedAt: updatedPayAt,
-        };
-
-        targetDisputeToProcess = item;
-        updatedDisputeItem = item;
-        return item;
-      })
+      prev.map((d) => (d.id === disputeId ? updatedDisputeItem : d))
     );
 
-    if (updatedDisputeItem) {
-      saveDocument('disputes', updatedDisputeItem);
-      const d: DisputeRequest = updatedDisputeItem;
-      logActivity(
-        d.status === 'APPROVED' ? 'DISPUTE_APPROVAL' : 'SYSTEM_EVENT',
-        `${d.status === 'APPROVED' ? 'Approved' : 'Updated approval status for'} dispute for ${d.employeeName} (${d.category || d.type} on ${d.date}).`,
-        'Disputes'
-      );
-    }
+    logActivity(
+      updatedDisputeItem.status === 'APPROVED' ? 'DISPUTE_APPROVAL' : 'SYSTEM_EVENT',
+      `${updatedDisputeItem.status === 'APPROVED' ? 'Approved' : 'Updated approval status for'} dispute for ${updatedDisputeItem.employeeName} (${updatedDisputeItem.category || updatedDisputeItem.type} on ${updatedDisputeItem.date}).`,
+      'Disputes'
+    );
 
     // Recalculate DTR Attendance summary ONLY when fully approved by BOTH or ADMIN
-    if (isFullyApproved && targetDisputeToProcess) {
-      const targetDispute: DisputeRequest = targetDisputeToProcess;
-      const empUser = users.find((u) => u.employeeId === targetDispute.employeeId);
-      const empName = targetDispute.employeeName || empUser?.name || 'Staff Member';
+    if (fullyApproved) {
+      const empUser = users.find((u) => u.employeeId === updatedDisputeItem.employeeId);
+      const empName = updatedDisputeItem.employeeName || empUser?.name || 'Staff Member';
       const dept = empUser?.department || 'Operations';
 
-      const targetDate = parseToYYYYMMDD(targetDispute.date);
+      const targetDate = parseToYYYYMMDD(updatedDisputeItem.date);
 
       const existingSummary = summaries.find(
-        (s) => s.employeeId === targetDispute.employeeId && parseToYYYYMMDD(s.date) === targetDate
+        (s) => s.employeeId === updatedDisputeItem.employeeId && parseToYYYYMMDD(s.date) === targetDate
       );
 
-      const cat = (targetDispute.category || targetDispute.type || '').toLowerCase();
+      const cat = (updatedDisputeItem.category || updatedDisputeItem.type || '').toLowerCase();
 
       let reqIn = existingSummary?.firstIn || '';
       let reqOut = existingSummary?.lastOut || '';
@@ -355,20 +354,20 @@ export default function App() {
       const isBreakOutCat = cat.includes('break-out') || cat.includes('break_out') || cat.includes('break out');
       const isBreakInCat = cat.includes('break-in') || cat.includes('break_in') || cat.includes('break in');
 
-      if (targetDispute.requestedClockIn || isTimeInCat) {
-        reqIn = targetDispute.requestedClockIn || reqIn || '08:00:00';
+      if (updatedDisputeItem.requestedClockIn || isTimeInCat) {
+        reqIn = updatedDisputeItem.requestedClockIn || reqIn || '08:00:00';
         newlyAdjustedFields.push('firstIn');
       }
-      if (targetDispute.requestedClockOut || isTimeOutCat) {
-        reqOut = targetDispute.requestedClockOut || reqOut || '17:00:00';
+      if (updatedDisputeItem.requestedClockOut || isTimeOutCat) {
+        reqOut = updatedDisputeItem.requestedClockOut || reqOut || '17:00:00';
         newlyAdjustedFields.push('lastOut');
       }
-      if (targetDispute.requestedBreakOut || isBreakOutCat) {
-        reqBreakOut = targetDispute.requestedBreakOut || reqBreakOut;
+      if (updatedDisputeItem.requestedBreakOut || isBreakOutCat) {
+        reqBreakOut = updatedDisputeItem.requestedBreakOut || reqBreakOut;
         newlyAdjustedFields.push('breakOut');
       }
-      if (targetDispute.requestedBreakIn || isBreakInCat) {
-        reqBreakIn = targetDispute.requestedBreakIn || reqBreakIn;
+      if (updatedDisputeItem.requestedBreakIn || isBreakInCat) {
+        reqBreakIn = updatedDisputeItem.requestedBreakIn || reqBreakIn;
         newlyAdjustedFields.push('breakIn');
       }
 
@@ -378,7 +377,7 @@ export default function App() {
       let finalStatus: AttendanceStatus = 'ADJUSTED';
 
       if (reqIn && reqOut) {
-        reqHours = targetDispute.requestedHours || calculateGrossHours(reqIn, reqOut) || 0;
+        reqHours = updatedDisputeItem.requestedHours || calculateGrossHours(reqIn, reqOut) || 0;
         otHours = reqHours > 8.0 ? reqHours - 8.0 : 0;
         utHours = reqHours < 8.0 && reqHours > 0 ? 8.0 - reqHours : 0;
         finalStatus = otHours > 0 ? 'OVERTIME' : utHours > 0 ? 'UNDERTIME' : 'ADJUSTED';
@@ -390,107 +389,101 @@ export default function App() {
         finalStatus = 'ABSENT';
       }
 
-      const reasonNote = `Time Adjustment (${cat}) Approved: ${targetDispute.reason}${adminNotes ? ` (Notes: ${adminNotes})` : ''}`;
+      const reasonNote = `Time Adjustment (${updatedDisputeItem.category || updatedDisputeItem.type}) Approved: ${updatedDisputeItem.reason}${adminNotes ? ` (Notes: ${adminNotes})` : ''}`;
 
-      let updatedSummaryItem: AttendanceSummaryDaily | null = null;
-      setSummaries((prev) => {
-        let found = false;
-        const updated = prev.map((s) => {
-          if (s.employeeId === targetDispute.employeeId && parseToYYYYMMDD(s.date) === targetDate) {
-            found = true;
-            const combinedFields = Array.from(
-              new Set([...(s.adjustedFields || []), ...newlyAdjustedFields])
-            );
-            const item: AttendanceSummaryDaily = {
-              ...s,
-              status: finalStatus,
-              firstIn: reqIn,
-              lastOut: reqOut,
-              breakOut: reqBreakOut || s.breakOut,
-              breakIn: reqBreakIn || s.breakIn,
-              netHoursWorked: reqHours,
-              undertimeHours: utHours,
-              overtimeHours: otHours,
-              anomalies: [reasonNote],
-              isAdjusted: true,
-              adjustmentNote: targetDispute.reason,
-              adjustedFields: combinedFields,
-            };
-            updatedSummaryItem = item;
-            return item;
-          }
-          return s;
-        });
+      let updatedSummaryItem: AttendanceSummaryDaily;
 
-        if (!found) {
-          const weekday = getDayOfWeekName(targetDate);
-          const newSummary: AttendanceSummaryDaily = {
-            id: `summary-adj-${Date.now()}`,
-            employeeId: targetDispute.employeeId,
-            employeeName: empName,
-            department: dept,
-            date: targetDate,
-            weekday: weekday || 'Workday',
-            firstIn: reqIn,
-            lastOut: reqOut,
-            breakOut: reqBreakOut,
-            breakIn: reqBreakIn,
-            totalBreakMinutes: 60,
-            netHoursWorked: reqHours,
-            undertimeHours: utHours,
-            overtimeHours: otHours,
-            ctoHoursEarned: reqHours > 10.0 ? reqHours - 10.0 : 0,
-            targetHours: 8.0,
-            status: finalStatus,
-            anomalies: [reasonNote],
-            punches: [],
-            isAdjusted: true,
-            adjustmentNote: targetDispute.reason,
-            adjustedFields: newlyAdjustedFields,
-          };
-          updatedSummaryItem = newSummary;
-          return [newSummary, ...prev];
-        }
-
-        return updated;
-      });
-
-      if (updatedSummaryItem) {
-        saveDocument('summaries', updatedSummaryItem);
+      if (existingSummary) {
+        const combinedFields = Array.from(
+          new Set([...(existingSummary.adjustedFields || []), ...newlyAdjustedFields])
+        );
+        const filteredAnomalies = (existingSummary.anomalies || []).filter(
+          (a) => !a.startsWith('Time Adjustment (') && !a.includes(' Approved:')
+        );
+        updatedSummaryItem = {
+          ...existingSummary,
+          status: finalStatus,
+          firstIn: reqIn,
+          lastOut: reqOut,
+          breakOut: reqBreakOut || existingSummary.breakOut,
+          breakIn: reqBreakIn || existingSummary.breakIn,
+          netHoursWorked: reqHours,
+          undertimeHours: utHours,
+          overtimeHours: otHours,
+          anomalies: [reasonNote, ...filteredAnomalies],
+          isAdjusted: true,
+          adjustmentNote: updatedDisputeItem.reason,
+          adjustedFields: combinedFields,
+        };
+      } else {
+        const weekday = getDayOfWeekName(targetDate);
+        updatedSummaryItem = {
+          id: `summary-adj-${Date.now()}`,
+          employeeId: updatedDisputeItem.employeeId,
+          employeeName: empName,
+          department: dept,
+          date: targetDate,
+          weekday: weekday || 'Workday',
+          firstIn: reqIn,
+          lastOut: reqOut,
+          breakOut: reqBreakOut,
+          breakIn: reqBreakIn,
+          totalBreakMinutes: 60,
+          netHoursWorked: reqHours,
+          undertimeHours: utHours,
+          overtimeHours: otHours,
+          ctoHoursEarned: reqHours > 10.0 ? reqHours - 10.0 : 0,
+          targetHours: 8.0,
+          status: finalStatus,
+          anomalies: [reasonNote],
+          punches: [],
+          isAdjusted: true,
+          adjustmentNote: updatedDisputeItem.reason,
+          adjustedFields: newlyAdjustedFields,
+        };
       }
+
+      await saveDocument('summaries', updatedSummaryItem);
+
+      setSummaries((prev) => {
+        const idx = prev.findIndex(
+          (s) => s.employeeId === updatedDisputeItem.employeeId && parseToYYYYMMDD(s.date) === targetDate
+        );
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = updatedSummaryItem;
+          return next;
+        }
+        return [updatedSummaryItem, ...prev];
+      });
     }
   };
 
   // Handle Dispute Rejection
-  const handleRejectDispute = (disputeId: string, adminNotes: string) => {
+  const handleRejectDispute = async (disputeId: string, adminNotes: string) => {
     const currentNow = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const targetDispute = disputes.find((d) => d.id === disputeId);
+    if (!targetDispute) return;
 
-    let updatedDisputeItem: DisputeRequest | null = null;
+    const updatedDisputeItem: DisputeRequest = {
+      ...targetDispute,
+      status: 'REJECTED',
+      adminNotes,
+      reviewedBy: currentUser?.name || 'Branch Manager / Admin',
+      reviewedAt: currentNow,
+    };
+
+    await saveDocument('disputes', updatedDisputeItem);
+
     setDisputes((prev) =>
-      prev.map((d) => {
-        if (d.id === disputeId) {
-          const item: DisputeRequest = {
-            ...d,
-            status: 'REJECTED',
-            adminNotes,
-            reviewedBy: currentUser?.name || 'Branch Manager / Admin',
-            reviewedAt: currentNow,
-          };
-          updatedDisputeItem = item;
-          return item;
-        }
-        return d;
-      })
+      prev.map((d) => (d.id === disputeId ? updatedDisputeItem : d))
     );
-    if (updatedDisputeItem) {
-      saveDocument('disputes', updatedDisputeItem);
-      const d: DisputeRequest = updatedDisputeItem;
-      logActivity(
-        'DISPUTE_REJECTION',
-        `Rejected dispute for ${d.employeeName} (${d.category || d.type} on ${d.date}).`,
-        'Disputes'
-      );
-    }
+
+    logActivity(
+      'DISPUTE_REJECTION',
+      `Rejected dispute for ${updatedDisputeItem.employeeName} (${updatedDisputeItem.category || updatedDisputeItem.type} on ${updatedDisputeItem.date}).`,
+      'Disputes'
+    );
   };
 
   // Handle Staff submitting new dispute
@@ -528,115 +521,107 @@ export default function App() {
     setCtoRequests((prev) => [req, ...prev]);
   };
 
-  const handleApproveCtoRequest = (id: string, notes?: string, approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => {
+  const handleApproveCtoRequest = async (id: string, notes?: string, approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => {
     const currentNow = new Date().toISOString();
     const role = approverRole || (currentUser?.role === 'BRANCH_MANAGER' || currentUser?.role === 'SHIFT_MANAGER' ? 'MANAGER' : 'PAYROLL');
 
-    let approvedReq: CtoRequest | null = null;
-    let updatedCtoItem: CtoRequest | null = null;
+    const targetCto = ctoRequests.find((r) => r.id === id);
+    if (!targetCto) return;
+
+    const isMgr = role === 'MANAGER';
+    const isPay = role === 'PAYROLL' || role === 'ADMIN';
+
+    const updatedMgrApp = isMgr ? true : Boolean(targetCto.managerApproved);
+    const updatedMgrBy = isMgr ? (currentUser?.name || 'Branch Manager') : targetCto.managerApprovedBy;
+    const updatedMgrAt = isMgr ? currentNow : targetCto.managerApprovedAt;
+
+    const updatedPayApp = isPay ? true : Boolean(targetCto.payrollApproved);
+    const updatedPayBy = isPay ? (currentUser?.name || 'Payroll Department') : targetCto.payrollApprovedBy;
+    const updatedPayAt = isPay ? currentNow : targetCto.payrollApprovedAt;
+
+    // Both approved, or Payroll/Admin final sign-off
+    const isFullyApproved = (updatedMgrApp && updatedPayApp) || (isPay && role === 'ADMIN');
+
+    const updatedCtoItem: CtoRequest = {
+      ...targetCto,
+      status: isFullyApproved ? 'APPROVED' : 'PENDING',
+      reviewNotes: notes || targetCto.reviewNotes,
+      reviewedBy: currentUser?.name || 'Authorized Approver',
+      managerApproved: updatedMgrApp,
+      managerApprovedBy: updatedMgrBy,
+      managerApprovedAt: updatedMgrAt,
+      payrollApproved: updatedPayApp,
+      payrollApprovedBy: updatedPayBy,
+      payrollApprovedAt: updatedPayAt,
+    };
+
+    await saveDocument('ctoRequests', updatedCtoItem);
 
     setCtoRequests((prev) =>
-      prev.map((r) => {
-        if (r.id !== id) return r;
-
-        const isMgr = role === 'MANAGER';
-        const isPay = role === 'PAYROLL' || role === 'ADMIN';
-
-        const updatedMgrApp = isMgr ? true : Boolean(r.managerApproved);
-        const updatedMgrBy = isMgr ? (currentUser?.name || 'Branch Manager') : r.managerApprovedBy;
-        const updatedMgrAt = isMgr ? currentNow : r.managerApprovedAt;
-
-        const updatedPayApp = isPay ? true : Boolean(r.payrollApproved);
-        const updatedPayBy = isPay ? (currentUser?.name || 'Payroll Department') : r.payrollApprovedBy;
-        const updatedPayAt = isPay ? currentNow : r.payrollApprovedAt;
-
-        // Both approved, or Payroll/Admin final sign-off
-        const isFullyApproved = (updatedMgrApp && updatedPayApp) || (isPay && role === 'ADMIN');
-
-        const updated: CtoRequest = {
-          ...r,
-          status: isFullyApproved ? 'APPROVED' : 'PENDING',
-          reviewNotes: notes || r.reviewNotes,
-          reviewedBy: currentUser?.name || 'Authorized Approver',
-          managerApproved: updatedMgrApp,
-          managerApprovedBy: updatedMgrBy,
-          managerApprovedAt: updatedMgrAt,
-          payrollApproved: updatedPayApp,
-          payrollApprovedBy: updatedPayBy,
-          payrollApprovedAt: updatedPayAt,
-        };
-
-        if (isFullyApproved) {
-          approvedReq = updated;
-        }
-
-        updatedCtoItem = updated;
-        return updated;
-      })
+      prev.map((r) => (r.id === id ? updatedCtoItem : r))
     );
 
-    if (updatedCtoItem) {
-      saveDocument('ctoRequests', updatedCtoItem);
-    }
-
     // If fully approved and it's a LEAVE request, mark Attendance Summary as LEAVE
-    if (approvedReq) {
-      const target: CtoRequest = approvedReq;
-      if (target.requestType !== 'CREDIT') {
-        let updatedSummaryItem: AttendanceSummaryDaily | null = null;
-        setSummaries((prevSummaries) => {
-          const existingIdx = prevSummaries.findIndex(
-            (s) => s.employeeId === target.employeeId && s.date === target.date
-          );
+    if (isFullyApproved && updatedCtoItem.requestType !== 'CREDIT') {
+      const target: CtoRequest = updatedCtoItem;
+      let updatedSummaryItem: AttendanceSummaryDaily | null = null;
+      const existingIdx = summaries.findIndex(
+        (s) => s.employeeId === target.employeeId && s.date === target.date
+      );
 
-          if (existingIdx >= 0) {
-            const next = [...prevSummaries];
-            const item = {
-              ...next[existingIdx],
-              status: 'LEAVE' as AttendanceStatus,
-              isAdjusted: true,
-              adjustmentNote: `Approved CTO Leave (${target.hoursRequested}h) - Approved by ${target.managerApprovedBy || 'Manager'} & ${target.payrollApprovedBy || 'Payroll'}`,
-              anomalies: Array.from(new Set([...(next[existingIdx].anomalies || []), 'Approved CTO Leave'])),
-            };
-            next[existingIdx] = item;
-            updatedSummaryItem = item;
-            return next;
-          } else {
-            const newSummary: AttendanceSummaryDaily = {
-              id: `sum-cto-${target.employeeId}-${target.date}`,
-              employeeId: target.employeeId,
-              employeeName: target.employeeName,
-              department: target.department,
-              branch: target.branch || target.department,
-              date: target.date,
-              weekday: new Date(target.date).toLocaleDateString('en-US', { weekday: 'long' }),
-              status: 'LEAVE',
-              firstIn: null,
-              lastOut: null,
-              totalBreakMinutes: 0,
-              netHoursWorked: 0,
-              undertimeHours: 0,
-              overtimeHours: 0,
-              targetHours: 8.0,
-              anomalies: ['Approved CTO Leave'],
-              punches: [],
-              isAdjusted: true,
-              adjustmentNote: `Approved CTO Leave (${target.hoursRequested}h) - Approved by ${target.managerApprovedBy || 'Manager'} & ${target.payrollApprovedBy || 'Payroll'}`,
-            };
-            updatedSummaryItem = newSummary;
-            return [newSummary, ...prevSummaries];
-          }
-        });
-
-        if (updatedSummaryItem) {
-          saveDocument('summaries', updatedSummaryItem);
-        }
+      if (existingIdx >= 0) {
+        updatedSummaryItem = {
+          ...summaries[existingIdx],
+          status: 'LEAVE' as AttendanceStatus,
+          isAdjusted: true,
+          adjustmentNote: `Approved CTO Leave (${target.hoursRequested}h) - Approved by ${target.managerApprovedBy || 'Manager'} & ${target.payrollApprovedBy || 'Payroll'}`,
+          anomalies: Array.from(new Set([...(summaries[existingIdx].anomalies || []), 'Approved CTO Leave'])),
+        };
+      } else {
+        updatedSummaryItem = {
+          id: `sum-cto-${target.employeeId}-${target.date}`,
+          employeeId: target.employeeId,
+          employeeName: target.employeeName,
+          department: target.department,
+          branch: target.branch || target.department,
+          date: target.date,
+          weekday: new Date(target.date).toLocaleDateString('en-US', { weekday: 'long' }),
+          status: 'LEAVE',
+          firstIn: null,
+          lastOut: null,
+          totalBreakMinutes: 0,
+          netHoursWorked: 0,
+          undertimeHours: 0,
+          overtimeHours: 0,
+          targetHours: 8.0,
+          anomalies: ['Approved CTO Leave'],
+          punches: [],
+          isAdjusted: true,
+          adjustmentNote: `Approved CTO Leave (${target.hoursRequested}h) - Approved by ${target.managerApprovedBy || 'Manager'} & ${target.payrollApprovedBy || 'Payroll'}`,
+        };
       }
+
+      await saveDocument('summaries', updatedSummaryItem);
+
+      setSummaries((prevSummaries) => {
+        const idx = prevSummaries.findIndex(
+          (s) => s.employeeId === target.employeeId && s.date === target.date
+        );
+        if (idx >= 0) {
+          const next = [...prevSummaries];
+          next[idx] = updatedSummaryItem!;
+          return next;
+        }
+        return [updatedSummaryItem!, ...prevSummaries];
+      });
     }
   };
 
-  const handleRejectCtoRequest = (id: string, notes?: string) => {
+  const handleRejectCtoRequest = async (id: string, notes?: string) => {
     const currentNow = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const targetCto = ctoRequests.find((r) => r.id === id);
+    if (!targetCto) return;
+
     const rejectorRole = currentUser?.role === 'BRANCH_MANAGER'
       ? `Branch Manager - ${currentUser.branch || 'YC Ebloc'}`
       : currentUser?.role === 'SHIFT_MANAGER'
@@ -651,27 +636,19 @@ export default function App() {
       ? `${currentUser.name} (${rejectorRole})`
       : 'Branch Manager';
 
-    let updatedItem: CtoRequest | null = null;
-    setCtoRequests((prev) =>
-      prev.map((r) => {
-        if (r.id === id) {
-          const item: CtoRequest = {
-            ...r,
-            status: 'REJECTED',
-            reviewNotes: notes || 'CTO Request Disapproved',
-            reviewedBy: rejectorIdentity,
-            reviewedAt: currentNow,
-          };
-          updatedItem = item;
-          return item;
-        }
-        return r;
-      })
-    );
+    const updatedCtoItem: CtoRequest = {
+      ...targetCto,
+      status: 'REJECTED',
+      reviewNotes: notes || 'CTO Request Disapproved',
+      reviewedBy: rejectorIdentity,
+      reviewedAt: currentNow,
+    };
 
-    if (updatedItem) {
-      saveDocument('ctoRequests', updatedItem);
-    }
+    await saveDocument('ctoRequests', updatedCtoItem);
+
+    setCtoRequests((prev) =>
+      prev.map((r) => (r.id === id ? updatedCtoItem : r))
+    );
   };
 
   const handleAddCtoManualAdjustment = (

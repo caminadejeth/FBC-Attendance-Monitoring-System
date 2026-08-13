@@ -4,7 +4,6 @@ import { getUserCtoStats } from '../utils/ctoHelper';
 import { PersonalPunchesTable } from './PersonalPunchesTable';
 import { WorkScheduleManager } from './WorkScheduleManager';
 import { CtoLeaveDashboard } from './CtoLeaveDashboard';
-import { ActivityLogsTable } from './ActivityLogsTable';
 import { TimeAdjustmentModal } from './TimeAdjustmentModal';
 import { DisputeCardDetails } from './DisputeCardDetails';
 import {
@@ -319,15 +318,6 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
             )}
           </div>
         </div>
-      )}
-
-      {/* ACTIVITY LOGS TAB */}
-      {(activeTab === 'activity-logs' || activeTab === 'all') && (
-        <ActivityLogsTable
-          activityLogs={activityLogs}
-          onClearActivityLogs={onClearActivityLogs}
-          currentUser={currentUser}
-        />
       )}
 
       {/* FILE DISPUTE MODAL */}

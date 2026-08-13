@@ -50,13 +50,22 @@ export const TimeAdjustmentModal: React.FC<TimeAdjustmentModalProps> = ({
       setRequestedBreakOut(preselectedSummary.breakOut || '12:00:00');
       setRequestedBreakIn(preselectedSummary.breakIn || '13:00:00');
       setRequestedHours(preselectedSummary.netHoursWorked > 0 ? preselectedSummary.netHoursWorked : 8.0);
-      if (preselectedSummary.anomalies.length > 0) {
-        setReason(preselectedSummary.anomalies.join(' | '));
+      
+      // Clean reason: filter out previous approved system notes from anomalies
+      const cleanAnomalies = (preselectedSummary.anomalies || []).filter(
+        (a) => !a.startsWith('Time Adjustment (') && !a.includes(' Approved:') && !a.includes('Notes:')
+      );
+      if (cleanAnomalies.length > 0) {
+        setReason(cleanAnomalies.join(' | '));
+      } else {
+        setReason('');
       }
     } else if (currentUser) {
       setSelectedEmpId(currentUser.employeeId);
+      setReason('');
     } else if (users.length > 0) {
       setSelectedEmpId(users[0].employeeId);
+      setReason('');
     }
   }, [preselectedSummary, currentUser, users, isOpen]);
 

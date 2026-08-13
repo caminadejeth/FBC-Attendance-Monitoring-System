@@ -17,7 +17,6 @@ import { WorkScheduleManager } from './WorkScheduleManager';
 import { ZktecoDatUploader } from './ZktecoDatUploader';
 import { CtoLeaveDashboard } from './CtoLeaveDashboard';
 import { EmployeeDtrSheet } from './EmployeeDtrSheet';
-import { ActivityLogsTable } from './ActivityLogsTable';
 import {
   parseAndCleanBiometricExcel,
   generateSampleBiometricExcel,
@@ -113,7 +112,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   activeTab,
 }) => {
   // Navigation sub-tab inside Manager Dashboard
-  const [managerTab, setManagerTab] = useState<'PERSONAL' | 'ZKTECO_UPLOAD' | 'ZKTECO_DAT' | 'BRANCH_LOGS' | 'SCHEDULES' | 'DISPUTES' | 'MY_CTO' | 'ACTIVITY_LOGS'>('BRANCH_LOGS');
+  const [managerTab, setManagerTab] = useState<'PERSONAL' | 'ZKTECO_UPLOAD' | 'ZKTECO_DAT' | 'BRANCH_LOGS' | 'SCHEDULES' | 'DISPUTES' | 'MY_CTO'>('BRANCH_LOGS');
 
   // Sync activeTab prop from sidebar navigation
   React.useEffect(() => {
@@ -131,8 +130,6 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       setManagerTab('MY_CTO');
     } else if (activeTab === 'my-punches' || activeTab === 'my-disputes' || activeTab === 'personal') {
       setManagerTab('PERSONAL');
-    } else if (activeTab === 'activity-logs') {
-      setManagerTab('ACTIVITY_LOGS');
     }
   }, [activeTab]);
 
@@ -1297,15 +1294,6 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             </div>
           </div>
         </div>
-      )}
-
-      {/* ACTIVITY LOGS TAB */}
-      {managerTab === 'ACTIVITY_LOGS' && (
-        <ActivityLogsTable
-          activityLogs={activityLogs}
-          onClearActivityLogs={onClearActivityLogs}
-          currentUser={currentUser}
-        />
       )}
 
       {/* FILE DISPUTE MODAL */}

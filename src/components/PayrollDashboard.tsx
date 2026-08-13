@@ -6,7 +6,6 @@ import { EmployeeDtrSheet } from './EmployeeDtrSheet';
 import { DisputeCardDetails } from './DisputeCardDetails';
 import { WorkScheduleManager } from './WorkScheduleManager';
 import { AttendanceSummaryDaily, CtoManualAdjustment, CtoRequest, User, BiometricPunch, DisputeRequest, WorkSchedule, ActivityLog } from '../types';
-import { ActivityLogsTable } from './ActivityLogsTable';
 import { buildGoogleSheetsData } from '../utils/googleSheetsSync';
 import { getUserCtoStats } from '../utils/ctoHelper';
 import { formatDateMDYY, formatDateMDYYYY, formatDateWithDay, formatTime12Hr, getFilteredSummariesWithAbsents, getBreakTimes, calculateGrossHours, formatRealtimeTimestamp } from '../utils/timeFormatters';
@@ -1472,14 +1471,6 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
           </div>
         );
       })()}
-
-      {/* ACTIVITY LOGS TAB */}
-      {(activeTab === 'activity-logs' || activeTab === 'all') && (
-        <ActivityLogsTable
-          activityLogs={activityLogs}
-          onClearActivityLogs={onClearActivityLogs}
-        />
-      )}
 
       {/* Time Adjustment Modal for Payroll */}
       {onSubmitDispute && (
