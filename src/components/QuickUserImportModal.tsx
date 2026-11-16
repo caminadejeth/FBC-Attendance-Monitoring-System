@@ -191,7 +191,7 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
       lastName: '',
       email: '',
       role: 'STAFF',
-      department: 'YC Ayala',
+      department: 'No fixed branch (Assigned per shift)',
       position: 'Staff Member',
       pin: String(Math.floor(1000 + Math.random() * 9000)),
       dateHired: new Date().toISOString().split('T')[0],
@@ -239,6 +239,17 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
       prev.map((r) => {
         if (r.tempId !== tempId) return r;
         const updated = { ...r, [field]: value };
+        if (field === 'role') {
+          if (value === 'STAFF' || value === 'SHIFT_MANAGER') {
+            updated.department = 'No fixed branch (Assigned per shift)';
+          } else if (
+            !r.department ||
+            r.department === 'No fixed branch (Assigned per shift)' ||
+            r.department === 'Store Operations'
+          ) {
+            updated.department = 'YC Ayala';
+          }
+        }
         // Auto update email if firstName or lastName changed and email is empty or auto-generated
         if (field === 'firstName' || field === 'lastName') {
           const fName = field === 'firstName' ? value : r.firstName;
@@ -315,7 +326,7 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
         email: r.email.trim() || `${fName.toLowerCase()}@fbcrestaurants.com`,
         pin: r.pin.trim(),
         role: r.role,
-        department: r.role === 'STAFF' ? 'Store Operations' : r.department,
+        department: (r.role === 'STAFF' || r.role === 'SHIFT_MANAGER') ? 'No fixed branch (Assigned per shift)' : r.department,
         position: r.position.trim() || 'Staff Member',
         hourlyRate: 120,
         dateHired: r.dateHired || new Date().toISOString().split('T')[0],
@@ -505,7 +516,7 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
         email: r.email,
         pin: r.pin,
         role: r.role,
-        department: r.role === 'STAFF' ? 'Store Operations' : r.department,
+        department: (r.role === 'STAFF' || r.role === 'SHIFT_MANAGER') ? 'No fixed branch (Assigned per shift)' : r.department,
         position: r.position,
         hourlyRate: 120,
         dateHired: r.dateHired,
@@ -536,13 +547,13 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
       <div className="bg-white rounded-2xl max-w-5xl w-full shadow-2xl border border-gray-200 overflow-hidden my-8 animate-in fade-in zoom-in-95 duration-150">
         {/* MODAL HEADER */}
-        <div className="bg-[#2C3524] text-white p-5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="bg-[#2C3524] text-white p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-[#656D4A] flex items-center justify-center text-amber-200 border border-amber-300/30 shrink-0">
               <Zap className="w-5 h-5 fill-amber-300 text-amber-300" />
             </div>
-            <div>
-              <h2 className="text-lg font-bold flex items-center gap-2">
+            <div className="min-w-0">
+              <h2 className="text-base sm:text-lg font-bold leading-snug">
                 Quick Add & Batch Import User Accounts
               </h2>
               <p className="text-xs text-amber-100/80">
@@ -551,24 +562,28 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
+              type="button"
               onClick={downloadUserImportTemplate}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-200 text-xs font-bold transition-colors cursor-pointer border border-amber-300/30"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-200 text-xs font-bold transition-colors cursor-pointer border border-amber-300/30 whitespace-nowrap"
               title="Download empty Excel import template with headers"
             >
-              <Download className="w-3.5 h-3.5" /> Download Template
+              <Download className="w-3.5 h-3.5" /> Template
             </button>
             <button
+              type="button"
               onClick={() => exportUsersToExcel(existingUsers)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-zinc-100 text-xs font-bold transition-colors cursor-pointer border border-white/20"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-zinc-100 text-xs font-bold transition-colors cursor-pointer border border-white/20 whitespace-nowrap"
               title="Export all current active users in Excel format"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" /> Export Roster
             </button>
             <button
+              type="button"
               onClick={onClose}
-              className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white cursor-pointer ml-2"
+              className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white cursor-pointer ml-auto sm:ml-2 shrink-0"
+              aria-label="Close modal"
             >
               ✕
             </button>
@@ -576,30 +591,32 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
         </div>
 
         {/* TAB SWITCHER */}
-        <div className="bg-[#F7F8F5] border-b border-gray-200 px-6 pt-3 flex gap-2">
+        <div className="bg-[#F7F8F5] border-b border-gray-200 px-4 sm:px-6 pt-3 flex flex-wrap gap-2">
           <button
+            type="button"
             onClick={() => setActiveTab('QUICK_ADD')}
-            className={`px-4 py-2 text-xs font-bold rounded-t-xl transition-all cursor-pointer border-t border-x ${
+            className={`px-3 sm:px-4 py-2 text-xs font-bold rounded-t-xl transition-all cursor-pointer border-t border-x ${
               activeTab === 'QUICK_ADD'
                 ? 'bg-white text-[#2C3524] border-gray-200 shadow-xs'
                 : 'bg-gray-100/80 text-gray-500 border-transparent hover:text-gray-800'
             }`}
           >
-            <span className="flex items-center gap-1.5">
+            <span className="flex items-center gap-1.5 whitespace-nowrap">
               <Zap className="w-3.5 h-3.5 text-amber-600" />
-              Quick Add Multi-Row Table
+              Quick Add Multi-Row
             </span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('IMPORT_FILE')}
-            className={`px-4 py-2 text-xs font-bold rounded-t-xl transition-all cursor-pointer border-t border-x ${
+            className={`px-3 sm:px-4 py-2 text-xs font-bold rounded-t-xl transition-all cursor-pointer border-t border-x ${
               activeTab === 'IMPORT_FILE'
                 ? 'bg-white text-[#2C3524] border-gray-200 shadow-xs'
                 : 'bg-gray-100/80 text-gray-500 border-transparent hover:text-gray-800'
             }`}
           >
-            <span className="flex items-center gap-1.5">
+            <span className="flex items-center gap-1.5 whitespace-nowrap">
               <Upload className="w-3.5 h-3.5 text-[#656D4A]" />
               Import CSV / Excel Sheet
             </span>
@@ -608,37 +625,162 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
 
         {/* TAB 1: QUICK ADD MULTI-ROW TABLE */}
         {activeTab === 'QUICK_ADD' && (
-          <form onSubmit={handleSaveQuickRows} className="p-6 space-y-4">
-            <div className="flex items-center justify-between">
+          <form onSubmit={handleSaveQuickRows} className="p-4 sm:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
               <div>
                 <h3 className="text-xs font-bold text-[#2C3524] uppercase tracking-wider">
                   Fast Staff Account Batch Creation
                 </h3>
                 <p className="text-[11px] text-gray-500">
-                  Type staff information directly into the grid below. Passcode PINs are auto-generated or editable.
+                  Type staff information directly below. Passcode PINs are auto-generated or editable.
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => handleAddMoreRows(1)}
-                  className="px-3 py-1.5 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                  className="px-3 py-1.5 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1 whitespace-nowrap"
                 >
                   <Plus className="w-3.5 h-3.5 text-[#656D4A]" /> Add 1 Row
                 </button>
                 <button
                   type="button"
                   onClick={() => handleAddMoreRows(3)}
-                  className="px-3 py-1.5 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                  className="px-3 py-1.5 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1 whitespace-nowrap"
                 >
                   <Plus className="w-3.5 h-3.5 text-[#656D4A]" /> Add 3 Rows
                 </button>
               </div>
             </div>
 
-            {/* INTERACTIVE INPUT GRID */}
-            <div className="overflow-x-auto border border-gray-200 rounded-xl max-h-[380px] overflow-y-auto">
+            {/* MOBILE EDITABLE CARDS VIEW (<md) */}
+            <div className="md:hidden max-h-[380px] overflow-y-auto space-y-3 pr-0.5">
+              {rows.map((row, idx) => {
+                const isDuplicate = existingUsers.some(
+                  (u) => u.employeeId.toLowerCase() === row.employeeId.trim().toLowerCase()
+                );
+                return (
+                  <div
+                    key={`mob-${row.tempId}`}
+                    className="p-3 rounded-xl border border-gray-200 bg-zinc-50/70 space-y-2.5 text-xs"
+                  >
+                    <div className="flex items-center justify-between border-b border-gray-200 pb-1.5">
+                      <span className="font-black text-[#2C3524]">Staff Row #{idx + 1}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveRow(row.tempId)}
+                        className="p-1 text-gray-400 hover:text-rose-600 rounded-md hover:bg-rose-50 cursor-pointer"
+                        title="Remove row"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase text-gray-500 mb-0.5">Emp ID *</label>
+                        <input
+                          type="text"
+                          value={row.employeeId}
+                          onChange={(e) => handleRowChange(row.tempId, 'employeeId', e.target.value)}
+                          placeholder="YC-1090"
+                          className={`w-full px-2 py-1.5 border rounded-lg font-mono text-xs font-bold ${
+                            isDuplicate ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-gray-300 bg-white'
+                          }`}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase text-gray-500 mb-0.5">PIN *</label>
+                        <div className="relative flex items-center">
+                          <input
+                            type="text"
+                            maxLength={6}
+                            value={row.pin}
+                            onChange={(e) => handleRowChange(row.tempId, 'pin', e.target.value)}
+                            className="w-full pl-2 pr-7 py-1.5 border border-gray-300 bg-white rounded-lg font-mono text-xs font-bold"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateRandomPin(row.tempId)}
+                            className="absolute right-1 text-gray-400 hover:text-amber-600 p-0.5 cursor-pointer"
+                            title="Regenerate PIN"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase text-gray-500 mb-0.5">First Name *</label>
+                        <input
+                          type="text"
+                          value={row.firstName}
+                          onChange={(e) => handleRowChange(row.tempId, 'firstName', e.target.value)}
+                          placeholder="e.g. Juan"
+                          className="w-full px-2 py-1.5 border border-gray-300 bg-white rounded-lg text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase text-gray-500 mb-0.5">Last Name *</label>
+                        <input
+                          type="text"
+                          value={row.lastName}
+                          onChange={(e) => handleRowChange(row.tempId, 'lastName', e.target.value)}
+                          placeholder="e.g. Cruz"
+                          className="w-full px-2 py-1.5 border border-gray-300 bg-white rounded-lg text-xs font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase text-gray-500 mb-0.5">Role</label>
+                        <select
+                          value={row.role}
+                          onChange={(e) => handleRowChange(row.tempId, 'role', e.target.value as UserRole)}
+                          className="w-full px-2 py-1.5 border border-gray-300 bg-white rounded-lg text-xs font-bold"
+                        >
+                          <option value="STAFF">STAFF</option>
+                          <option value="SHIFT_MANAGER">SHIFT_MANAGER</option>
+                          <option value="BRANCH_MANAGER">BRANCH_MANAGER</option>
+                          <option value="PAYROLL">PAYROLL</option>
+                          <option value="ADMIN">ADMIN</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase text-gray-500 mb-0.5">Position</label>
+                        <input
+                          type="text"
+                          value={row.position}
+                          onChange={(e) => handleRowChange(row.tempId, 'position', e.target.value)}
+                          placeholder="Kitchen Crew"
+                          className="w-full px-2 py-1.5 border border-gray-300 bg-white rounded-lg text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase text-gray-500 mb-0.5">Branch / Dept</label>
+                      {row.role === 'STAFF' || row.role === 'SHIFT_MANAGER' ? (
+                        <div className="w-full px-2 py-1.5 border border-amber-200 bg-amber-50/60 rounded-lg text-[11px] font-semibold text-amber-900">
+                          ⚡ No fixed branch (Assigned per shift)
+                        </div>
+                      ) : (
+                        <select
+                          value={row.department}
+                          onChange={(e) => handleRowChange(row.tempId, 'department', e.target.value)}
+                          className="w-full px-2 py-1.5 border border-gray-300 bg-white rounded-lg text-xs"
+                        >
+                          {STORE_BRANCHES.map((b) => (
+                            <option key={b} value={b}>
+                              {b}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* INTERACTIVE INPUT GRID (Desktop) */}
+            <div className="hidden md:block overflow-x-auto border border-gray-200 rounded-xl max-h-[380px] overflow-y-auto">
               <table className="w-full text-left text-xs">
                 <thead className="bg-[#F7F8F5] text-[#4A543E] font-bold uppercase tracking-wider sticky top-0 z-10 border-b border-gray-200">
                   <tr>
@@ -736,19 +878,28 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
 
                         {/* DEPARTMENT / BRANCH */}
                         <td className="p-1.5">
-                          <select
-                            value={row.department}
-                            onChange={(e) =>
-                              handleRowChange(row.tempId, 'department', e.target.value)
-                            }
-                            className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs focus:ring-1 focus:ring-[#656D4A] focus:outline-none bg-white"
-                          >
-                            {STORE_BRANCHES.map((b) => (
-                              <option key={b} value={b}>
-                                {b}
-                              </option>
-                            ))}
-                          </select>
+                          {(row.role === 'STAFF' || row.role === 'SHIFT_MANAGER') ? (
+                            <div
+                              className="w-full px-2 py-1.5 border border-amber-200 bg-amber-50/60 rounded-lg text-[11px] font-semibold text-amber-900 truncate"
+                              title="No fixed branch (Assigned per shift)"
+                            >
+                              ⚡ No fixed branch (Assigned per shift)
+                            </div>
+                          ) : (
+                            <select
+                              value={row.department}
+                              onChange={(e) =>
+                                handleRowChange(row.tempId, 'department', e.target.value)
+                              }
+                              className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs focus:ring-1 focus:ring-[#656D4A] focus:outline-none bg-white"
+                            >
+                              {STORE_BRANCHES.map((b) => (
+                                <option key={b} value={b}>
+                                  {b}
+                                </option>
+                              ))}
+                            </select>
+                          )}
                         </td>
 
                         {/* POSITION */}
@@ -885,7 +1036,7 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
             {/* PREVIEW TABLE OF PARSED USERS */}
             {parsedUsers.length > 0 && (
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-amber-600" />
                     <span className="text-xs font-bold text-[#2C3524]">
@@ -904,7 +1055,39 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
                   </label>
                 </div>
 
-                <div className="overflow-x-auto border border-gray-200 rounded-xl max-h-[260px] overflow-y-auto">
+                {/* Mobile Preview Cards (<md) */}
+                <div className="md:hidden max-h-[260px] overflow-y-auto space-y-2">
+                  {parsedUsers.map((u) => {
+                    const isExisting = existingUsers.some(
+                      (ex) => ex.employeeId.toLowerCase() === u.employeeId.toLowerCase()
+                    );
+                    return (
+                      <div key={`mob-${u.tempId}`} className="p-3 rounded-xl border border-gray-200 bg-white text-xs space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-[#2C3524]">
+                            {[u.firstName, u.lastName].join(' ')} <span className="font-mono text-gray-500">({u.employeeId})</span>
+                          </span>
+                          {isExisting ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                              {overwriteDuplicates ? 'Will Update' : 'Skip'}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                              New
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-gray-600 flex flex-wrap items-center gap-2">
+                          <span className="px-1.5 py-0.5 rounded bg-[#E6E8DE] text-[#2C3524] font-bold text-[10px]">{u.role}</span>
+                          <span>{u.position}</span>
+                          <span className="font-mono">PIN: {u.pin}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="hidden md:block overflow-x-auto border border-gray-200 rounded-xl max-h-[260px] overflow-y-auto">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-[#F7F8F5] text-[#4A543E] font-bold uppercase tracking-wider sticky top-0 z-10 border-b border-gray-200">
                       <tr>
@@ -938,7 +1121,11 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
                                 {u.role}
                               </span>
                             </td>
-                            <td className="p-2.5">{u.department}</td>
+                            <td className="p-2.5">
+                              {(u.role === 'STAFF' || u.role === 'SHIFT_MANAGER')
+                                ? 'No fixed branch (Assigned per shift)'
+                                : u.department}
+                            </td>
                             <td className="p-2.5">{u.position}</td>
                             <td className="p-2.5 font-mono font-bold">{u.pin}</td>
                             <td className="p-2.5">

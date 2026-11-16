@@ -56,6 +56,14 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
   // Standard store branches list
   const STORE_BRANCHES = ['YC Ebloc', 'YC Ramos', 'YC Talisay', 'YC SM Seaside', 'YC Ayala', 'YC Banilad'];
 
+  const getSafeWeekdayName = (dateStr?: string): string => {
+    if (!dateStr) return '';
+    const parsed = new Date(dateStr);
+    return Number.isNaN(parsed.getTime())
+      ? ''
+      : parsed.toLocaleDateString('en-US', { weekday: 'long' });
+  };
+
   // Helper to calculate Monday of a week offset relative to today
   const getMondayOfWeek = (offsetWeeks: number = 0) => {
     const today = new Date();
@@ -513,17 +521,23 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
 
         {/* Week Selector Controls & Advance Schedule Action */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center rounded-xl bg-zinc-100 p-1 border border-zinc-200 shadow-2xs">
+          <div className="inline-flex flex-wrap items-center rounded-xl bg-zinc-100 p-1 border border-zinc-200 shadow-2xs">
             <button
-              onClick={() => setWeekOffset(weekOffset - 1)}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-bold text-zinc-700 hover:bg-white hover:text-zinc-950 transition-all cursor-pointer flex items-center gap-1"
+              onClick={() => {
+                setWeekOffset(weekOffset - 1);
+                setCurrentPage(1);
+              }}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-bold text-zinc-700 hover:bg-white hover:text-zinc-950 transition-all cursor-pointer flex items-center gap-1 whitespace-nowrap"
               title="View Previous Week Schedule"
             >
               ‹ Prev Week
             </button>
             <button
-              onClick={() => setWeekOffset(0)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+              onClick={() => {
+                setWeekOffset(0);
+                setCurrentPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer whitespace-nowrap ${
                 weekOffset === 0
                   ? 'bg-[#656D4A] text-white shadow-2xs'
                   : 'text-zinc-700 hover:bg-white'
@@ -532,8 +546,11 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
               Current Week
             </button>
             <button
-              onClick={() => setWeekOffset(1)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+              onClick={() => {
+                setWeekOffset(1);
+                setCurrentPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer whitespace-nowrap ${
                 weekOffset === 1
                   ? 'bg-amber-400 text-zinc-950 shadow-2xs border border-zinc-950'
                   : 'text-zinc-700 hover:bg-white'
@@ -565,7 +582,10 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
             type="text"
             placeholder="Search staff name, ID, or department..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
             className="w-full pl-9 pr-3 py-1.5 bg-[#F7F8F5] border border-[#D3D8C8] rounded-xl text-xs font-bold focus:ring-2 focus:ring-[#656D4A]"
           />
         </div>
@@ -575,7 +595,10 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
             <Store className="w-4 h-4 text-[#656D4A]" />
             <select
               value={selectedBranch}
-              onChange={(e) => setSelectedBranch(e.target.value)}
+              onChange={(e) => {
+                setSelectedBranch(e.target.value);
+                setCurrentPage(1);
+              }}
               className="px-3 py-1.5 bg-[#F7F8F5] border border-[#D3D8C8] rounded-xl text-xs font-bold"
             >
               <option value="ALL">All Store Branches</option>
@@ -591,7 +614,10 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
             <Building2 className="w-4 h-4 text-[#656D4A]" />
             <select
               value={selectedDept}
-              onChange={(e) => setSelectedDept(e.target.value)}
+              onChange={(e) => {
+                setSelectedDept(e.target.value);
+                setCurrentPage(1);
+              }}
               className="px-3 py-1.5 bg-[#F7F8F5] border border-[#D3D8C8] rounded-xl text-xs font-bold"
             >
               <option value="ALL">All Departments</option>
@@ -663,99 +689,255 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
         </div>
       )}
 
-      {/* Tabular Work Schedule Roster */}
-      <div className="overflow-x-auto rounded-xl border border-[#D3D8C8] shadow-2xs">
-        <table className="w-full text-left border-collapse min-w-[900px]">
-          <thead>
-            <tr className="bg-[#656D4A] text-white text-[11px] font-bold uppercase tracking-wider">
-              <th className="p-2 md:p-2.5 border-b border-[#4A543E] min-w-[180px]">
-                Names / Staff
-              </th>
-              {weekDaysDates.map((wDay) => (
-                <th
-                  key={wDay.dayName}
-                  className="p-2 md:p-2.5 text-center border-b border-[#4A543E] min-w-[100px]"
-                >
-                  <div className="font-extrabold">{wDay.dayName}</div>
-                  <div className="text-[9px] font-mono font-normal opacity-90">{wDay.formattedShort}</div>
-                </th>
-              ))}
-              <th className="p-2 md:p-2.5 text-center border-b border-[#4A543E] min-w-[120px]">
-                Shift Title
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 text-xs">
-            {filteredSchedules.length === 0 ? (
-              <tr>
-                <td colSpan={9} className="p-8 text-center text-gray-500 font-bold">
+      {/* Mobile & Desktop Work Schedule Roster */}
+      {(() => {
+        const totalSchedulePages = Math.max(1, Math.ceil(filteredSchedules.length / pageSize));
+        const safeSchedulePage = Math.min(currentPage, totalSchedulePages);
+        const paginatedSchedules = filteredSchedules.slice(
+          (safeSchedulePage - 1) * pageSize,
+          safeSchedulePage * pageSize
+        );
+
+        return (
+          <div className="space-y-3">
+            {/* Mobile Weekly Roster Cards */}
+            <div className="md:hidden space-y-3">
+              {paginatedSchedules.length === 0 ? (
+                <div className="p-6 text-center text-xs text-gray-500 font-bold border border-dashed border-[#D3D8C8] rounded-xl bg-[#F7F8F5]">
                   {selectedBranch !== 'ALL'
                     ? `No staff scheduled to work at ${selectedBranch} for this week.`
                     : 'No staff schedules found matching your query.'}
-                </td>
-              </tr>
-            ) : (
-              filteredSchedules
-                .slice((currentPage - 1) * pageSize, currentPage * pageSize)
-                .map((sch) => {
-                const userObj = users.find((u) => u.employeeId === sch.employeeId);
-                return (
-                  <tr
-                    key={sch.id}
-                    className="hover:bg-[#F9FAF6] transition-colors group"
-                  >
-                    {/* Names Column */}
-                    <td className="p-2 md:p-2.5 bg-white group-hover:bg-[#F9FAF6]">
-                      <div className="flex items-center gap-2">
-                        {userObj?.avatarUrl ? (
-                          <img
-                            src={userObj.avatarUrl}
-                            alt={sch.employeeName}
-                            className="w-7 h-7 rounded-lg object-cover border border-[#A4AC86] shrink-0"
-                          />
-                        ) : (
-                          <div className="w-7 h-7 rounded-lg bg-[#656D4A] text-white font-bold flex items-center justify-center text-[10px] shrink-0">
-                            {sch.employeeName.substring(0, 2).toUpperCase()}
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <div className="font-bold text-[#2C3524] truncate text-xs">
-                            {sch.employeeName}
-                          </div>
-                          <div className="text-[10px] text-gray-500 font-mono font-bold truncate flex items-center gap-1 flex-wrap">
-                            <span>{sch.employeeId}</span>
-                            <span>•</span>
-                            <span className="text-[#656D4A] font-extrabold">{userObj?.position || sch.department}</span>
+                </div>
+              ) : (
+                paginatedSchedules.map((sch) => {
+                  const userObj = users.find((u) => u.employeeId === sch.employeeId);
+                  return (
+                    <div
+                      key={`mob-sch-${sch.id}`}
+                      className="rounded-xl border border-[#D3D8C8] bg-white p-3.5 space-y-2.5 shadow-2xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {userObj?.avatarUrl ? (
+                            <img
+                              src={userObj.avatarUrl}
+                              alt={sch.employeeName}
+                              className="w-8 h-8 rounded-lg object-cover border border-[#A4AC86] shrink-0"
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-lg bg-[#656D4A] text-white font-bold flex items-center justify-center text-[11px] shrink-0">
+                              {sch.employeeName.substring(0, 2).toUpperCase()}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <div className="font-bold text-[#2C3524] truncate text-sm">
+                              {sch.employeeName}
+                            </div>
+                            <div className="text-[10px] text-gray-500 font-mono font-bold truncate">
+                              {sch.employeeId} · <span className="text-[#656D4A]">{userObj?.position || sch.department}</span>
+                            </div>
                           </div>
                         </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#F4F6F0] text-[#2C3524] border border-[#D3D8C8] max-w-[110px] truncate">
+                            {sch.shiftName}
+                          </span>
+                          {!isReadOnly && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEdit(sch)}
+                              className="p-1.5 rounded-lg bg-white border border-[#D3D8C8] hover:bg-[#656D4A] hover:text-white text-gray-700 transition-colors cursor-pointer"
+                              title="Configure Schedule"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </td>
 
-                    {/* Monday to Sunday Columns */}
-                    {ALL_DAYS.map((day, dayIndex) => {
-                      const targetDateStr = weekDaysDates[dayIndex].dateStr;
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {ALL_DAYS.map((day, dayIndex) => {
+                          const wDay = weekDaysDates[dayIndex];
+                          const targetDateStr = wDay.dateStr;
 
-                      const approvedCto = ctoRequests.find((r) => {
-                        if (r.employeeId !== sch.employeeId || r.requestType === 'CREDIT') return false;
-                        if (r.status !== 'APPROVED') return false;
-                        const reqDayName = new Date(r.date).toLocaleDateString('en-US', { weekday: 'long' });
-                        return r.date === targetDateStr || reqDayName === day;
-                      });
+                          const approvedCto = ctoRequests.find((r) => {
+                            if (r.employeeId !== sch.employeeId || r.requestType === 'CREDIT') return false;
+                            if (r.status !== 'APPROVED') return false;
+                            return r.date === targetDateStr || getSafeWeekdayName(r.date) === day;
+                          });
 
-                      const pendingCto = ctoRequests.find((r) => {
-                        if (r.employeeId !== sch.employeeId || r.requestType === 'CREDIT') return false;
-                        if (r.status !== 'PENDING') return false;
-                        const reqDayName = new Date(r.date).toLocaleDateString('en-US', { weekday: 'long' });
-                        return r.date === targetDateStr || reqDayName === day;
-                      });
+                          const pendingCto = ctoRequests.find((r) => {
+                            if (r.employeeId !== sch.employeeId || r.requestType === 'CREDIT') return false;
+                            if (r.status !== 'PENDING') return false;
+                            return r.date === targetDateStr || getSafeWeekdayName(r.date) === day;
+                          });
 
-                      const leaveSummary = summaries.find(
-                        (s) =>
-                          s.employeeId === sch.employeeId &&
-                          s.status === 'LEAVE' &&
-                          (s.date === targetDateStr ||
-                            new Date(s.date).toLocaleDateString('en-US', { weekday: 'long' }) === day)
-                      );
+                          const leaveSummary = summaries.find(
+                            (s) =>
+                              s.employeeId === sch.employeeId &&
+                              s.status === 'LEAVE' &&
+                              (s.date === targetDateStr || getSafeWeekdayName(s.date) === day)
+                          );
+
+                          const isWorkDay = sch.workDays.includes(day);
+                          const customShift = sch.dailyShifts?.[day];
+                          const isOff = customShift ? customShift.isOff : !isWorkDay;
+                          const startTime = customShift?.startTime || sch.startTime || '08:00';
+                          const endTime = customShift?.endTime || sch.endTime || '17:00';
+                          const dayBranch = customShift?.branch || sch.branch || userObj?.branch || 'YC Ebloc';
+                          const isNoSchedule = (sch.shiftName === 'No Schedule' || (!sch.workDays || sch.workDays.length === 0)) && !customShift;
+
+                          return (
+                            <div
+                              key={`mob-${sch.id}-${day}`}
+                              onClick={(e) => {
+                                if (!approvedCto) handleDirectToggleDay(sch, day, e);
+                              }}
+                              className={`p-2 rounded-lg border text-[11px] flex flex-col justify-between gap-1 ${
+                                approvedCto || leaveSummary
+                                  ? 'bg-amber-400 text-zinc-950 border-amber-600'
+                                  : pendingCto
+                                  ? 'bg-amber-100 text-amber-900 border-amber-400'
+                                  : !isOff
+                                  ? 'bg-[#EAF0DE] text-[#2C3524] border-[#A4AC86]'
+                                  : isNoSchedule
+                                  ? 'bg-zinc-50 text-zinc-400 border-dashed border-zinc-300'
+                                  : 'bg-zinc-100 text-zinc-500 border-zinc-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="font-extrabold text-[10px] uppercase">
+                                  {day.slice(0, 3)} · {wDay.formattedShort}
+                                </span>
+                                {!isReadOnly && !(approvedCto || leaveSummary || pendingCto) && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleOpenDayCellEditor(sch, day, e)}
+                                    className="p-0.5 rounded hover:bg-black/10 text-current cursor-pointer"
+                                    title={`Edit ${day} shift`}
+                                  >
+                                    <Settings className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                              {approvedCto || leaveSummary ? (
+                                <div className="font-black text-[10px]">
+                                  CTO LEAVE ({approvedCto?.hoursRequested || 8.0}h)
+                                </div>
+                              ) : pendingCto ? (
+                                <div className="font-bold text-[10px]">CTO FILED (Pending)</div>
+                              ) : !isOff ? (
+                                <div>
+                                  <div className="font-mono font-bold text-[10.5px]">
+                                    {startTime} - {endTime}
+                                  </div>
+                                  <div className="text-[9.5px] font-bold truncate opacity-85">
+                                    {dayBranch}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="font-mono font-bold text-[10px] uppercase">
+                                  {isNoSchedule ? 'No schedule' : 'OFF'}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Tabular Work Schedule Roster (Desktop) */}
+            <div className="hidden md:block overflow-x-auto rounded-xl border border-[#D3D8C8] shadow-2xs">
+              <table className="w-full text-left border-collapse min-w-[900px]">
+                <thead>
+                  <tr className="bg-[#656D4A] text-white text-[11px] font-bold uppercase tracking-wider">
+                    <th className="p-2 md:p-2.5 border-b border-[#4A543E] min-w-[180px]">
+                      Names / Staff
+                    </th>
+                    {weekDaysDates.map((wDay) => (
+                      <th
+                        key={wDay.dayName}
+                        className="p-2 md:p-2.5 text-center border-b border-[#4A543E] min-w-[100px]"
+                      >
+                        <div className="font-extrabold">{wDay.dayName}</div>
+                        <div className="text-[9px] font-mono font-normal opacity-90">{wDay.formattedShort}</div>
+                      </th>
+                    ))}
+                    <th className="p-2 md:p-2.5 text-center border-b border-[#4A543E] min-w-[120px]">
+                      Shift Title
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 text-xs">
+                  {filteredSchedules.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="p-8 text-center text-gray-500 font-bold">
+                        {selectedBranch !== 'ALL'
+                          ? `No staff scheduled to work at ${selectedBranch} for this week.`
+                          : 'No staff schedules found matching your query.'}
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedSchedules.map((sch) => {
+                      const userObj = users.find((u) => u.employeeId === sch.employeeId);
+                      return (
+                        <tr
+                          key={sch.id}
+                          className="hover:bg-[#F9FAF6] transition-colors group"
+                        >
+                          {/* Names Column */}
+                          <td className="p-2 md:p-2.5 bg-white group-hover:bg-[#F9FAF6]">
+                            <div className="flex items-center gap-2">
+                              {userObj?.avatarUrl ? (
+                                <img
+                                  src={userObj.avatarUrl}
+                                  alt={sch.employeeName}
+                                  className="w-7 h-7 rounded-lg object-cover border border-[#A4AC86] shrink-0"
+                                />
+                              ) : (
+                                <div className="w-7 h-7 rounded-lg bg-[#656D4A] text-white font-bold flex items-center justify-center text-[10px] shrink-0">
+                                  {sch.employeeName.substring(0, 2).toUpperCase()}
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <div className="font-bold text-[#2C3524] truncate text-xs">
+                                  {sch.employeeName}
+                                </div>
+                                <div className="text-[10px] text-gray-500 font-mono font-bold truncate flex items-center gap-1 flex-wrap">
+                                  <span>{sch.employeeId}</span>
+                                  <span>•</span>
+                                  <span className="text-[#656D4A] font-extrabold">{userObj?.position || sch.department}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Monday to Sunday Columns */}
+                          {ALL_DAYS.map((day, dayIndex) => {
+                            const targetDateStr = weekDaysDates[dayIndex].dateStr;
+
+                            const approvedCto = ctoRequests.find((r) => {
+                              if (r.employeeId !== sch.employeeId || r.requestType === 'CREDIT') return false;
+                              if (r.status !== 'APPROVED') return false;
+                              return r.date === targetDateStr || getSafeWeekdayName(r.date) === day;
+                            });
+
+                            const pendingCto = ctoRequests.find((r) => {
+                              if (r.employeeId !== sch.employeeId || r.requestType === 'CREDIT') return false;
+                              if (r.status !== 'PENDING') return false;
+                              return r.date === targetDateStr || getSafeWeekdayName(r.date) === day;
+                            });
+
+                            const leaveSummary = summaries.find(
+                              (s) =>
+                                s.employeeId === sch.employeeId &&
+                                s.status === 'LEAVE' &&
+                                (s.date === targetDateStr || getSafeWeekdayName(s.date) === day)
+                            );
 
                       const isWorkDay = sch.workDays.includes(day);
                       const customShift = sch.dailyShifts?.[day];
@@ -891,22 +1073,31 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
                 );
               })
             )}
-          </tbody>
-        </table>
-        <TablePagination
-          currentPage={currentPage}
-          totalPages={Math.ceil(filteredSchedules.length / pageSize)}
-          pageSize={pageSize}
-          totalItems={filteredSchedules.length}
-          onPageChange={setCurrentPage}
-          onPageSizeChange={setPageSize}
-          pageSizeOptions={[5, 10, 20, 50]}
-        />
-      </div>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="rounded-xl border border-[#D3D8C8] overflow-hidden">
+              <TablePagination
+                currentPage={safeSchedulePage}
+                totalPages={totalSchedulePages}
+                pageSize={pageSize}
+                totalItems={filteredSchedules.length}
+                onPageChange={setCurrentPage}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setCurrentPage(1);
+                }}
+                pageSizeOptions={[5, 10, 20, 50]}
+              />
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Roster Legend & Tips */}
       <div className="flex flex-wrap items-center justify-between text-[11px] text-gray-500 bg-[#F7F8F5] p-3 rounded-xl border border-[#D3D8C8] gap-2">
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <span className="font-bold text-[#2C3524]">Legend:</span>
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded bg-[#EAF0DE] border border-[#A4AC86] inline-block"></span>
@@ -930,7 +1121,7 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
       {/* Quick Day Cell Time Editor Modal */}
       {editingDayCell && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-gray-200 space-y-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-gray-200 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b pb-3">
               <div>
                 <h3 className="text-sm font-bold text-[#2C3524]">
@@ -1059,7 +1250,7 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
       {/* Main Edit Schedule Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-gray-200 space-y-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-gray-200 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b pb-3">
               <div className="flex items-center gap-2">
                 <Briefcase className="w-5 h-5 text-[#656D4A]" />

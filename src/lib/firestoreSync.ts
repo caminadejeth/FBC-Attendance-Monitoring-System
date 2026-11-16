@@ -61,8 +61,60 @@ export function sortItemsByCollection<T extends { id: string }>(
     if (colName === 'users') {
       return (a.name || '').localeCompare(b.name || '');
     }
+    if (colName === 'stockMovements') {
+      const timeA = new Date(a.timestamp || a.date || 0).getTime();
+      const timeB = new Date(b.timestamp || b.date || 0).getTime();
+      return timeB - timeA;
+    }
+    if (colName === 'stockTransfers') {
+      const timeA = new Date(a.createdAt || a.date || 0).getTime();
+      const timeB = new Date(b.createdAt || b.date || 0).getTime();
+      return timeB - timeA;
+    }
+    if (colName === 'warehouseCategories') {
+      const orderA = typeof a.sortOrder === 'number' ? a.sortOrder : 9999;
+      const orderB = typeof b.sortOrder === 'number' ? b.sortOrder : 9999;
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.name || '').localeCompare(b.name || '');
+    }
+    if (colName === 'warehouseItems') {
+      const branchCmp = (a.branchName || '').localeCompare(b.branchName || '');
+      if (branchCmp !== 0) return branchCmp;
+      const catCmp = (a.category || '').localeCompare(b.category || '');
+      if (catCmp !== 0) return catCmp;
+      return (a.description || '').localeCompare(b.description || '');
+    }
     return 0;
   });
+}
+
+export async function isWarehouseCatalogSeeded(): Promise<boolean> {
+  try {
+    if (localStorage.getItem('fbc_warehouse_catalog_seeded_v1') === 'true') {
+      return true;
+    }
+    const metaSnap = await getDoc(doc(db, '_metadata', 'warehouseCatalogSeededV1'));
+    if (metaSnap.exists()) {
+      localStorage.setItem('fbc_warehouse_catalog_seeded_v1', 'true');
+      return true;
+    }
+  } catch (e) {
+    console.error('Error checking warehouse catalog seeded status:', e);
+  }
+  return false;
+}
+
+export async function markWarehouseCatalogSeeded(): Promise<void> {
+  try {
+    localStorage.setItem('fbc_warehouse_catalog_seeded_v1', 'true');
+    await setDoc(
+      doc(db, '_metadata', 'warehouseCatalogSeededV1'),
+      { seeded: true, timestamp: new Date().toISOString() },
+      { merge: true }
+    );
+  } catch (e) {
+    console.error('Error marking warehouse catalog seeded:', e);
+  }
 }
 
 export function getDeletedIds(colName: string): Set<string> {
@@ -133,25 +185,43 @@ export function subscribeCollection<T extends { id: string }>(
       const deletedSet = getDeletedIds(collectionName);
 
       if (snapshot.empty) {
-        const isSeededLocally = localStorage.getItem(seededKey);
+        let isSeededLocally: string | null = null;
+        try {
+          isSeededLocally = localStorage.getItem(seededKey);
+        } catch (e) {
+          console.error(`Failed reading ${seededKey}`, e);
+        }
         const isSeededInCloud = await isCloudInitialized();
 
         if (isSeededLocally || isSeededInCloud) {
           // Collection was already initialized; empty means intentionally empty!
-          localStorage.setItem(storageKey, JSON.stringify([]));
+          try {
+            localStorage.setItem(storageKey, JSON.stringify([]));
+          } catch (e) {
+            console.error(`Failed clearing cache ${storageKey}`, e);
+          }
           onUpdate([]);
           return;
         }
 
         // If not seeded yet anywhere, check if we have cached local data
-        const cached = localStorage.getItem(storageKey);
+        let cached: string | null = null;
+        try {
+          cached = localStorage.getItem(storageKey);
+        } catch (e) {
+          console.error(`Failed reading cache ${storageKey}`, e);
+        }
         if (cached) {
           try {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed) && parsed.length > 0) {
               const filtered = parsed.filter((item) => !deletedSet.has(item.id));
               const sorted = sortItemsByCollection(collectionName, filtered);
-              localStorage.setItem(seededKey, 'true');
+              try {
+                localStorage.setItem(seededKey, 'true');
+              } catch (e) {
+                console.error(`Failed marking ${seededKey}`, e);
+              }
               await markCloudInitialized();
               onUpdate(sorted);
               // Seed cached items to firestore so cloud is populated
@@ -168,7 +238,11 @@ export function subscribeCollection<T extends { id: string }>(
         const sortedInitial = sortItemsByCollection(collectionName, validInitial);
 
         if (sortedInitial.length > 0) {
-          localStorage.setItem(seededKey, 'true');
+          try {
+            localStorage.setItem(seededKey, 'true');
+          } catch (e) {
+            console.error(`Failed marking ${seededKey}`, e);
+          }
           await markCloudInitialized();
           await saveDocuments(collectionName, sortedInitial);
           try {
@@ -178,13 +252,21 @@ export function subscribeCollection<T extends { id: string }>(
           }
           onUpdate(sortedInitial);
         } else {
-          localStorage.setItem(seededKey, 'true');
+          try {
+            localStorage.setItem(seededKey, 'true');
+            localStorage.setItem(storageKey, JSON.stringify([]));
+          } catch (e) {
+            console.error(`Failed initializing empty cache ${storageKey}`, e);
+          }
           await markCloudInitialized();
-          localStorage.setItem(storageKey, JSON.stringify([]));
           onUpdate([]);
         }
       } else {
-        localStorage.setItem(seededKey, 'true');
+        try {
+          localStorage.setItem(seededKey, 'true');
+        } catch (e) {
+          console.error(`Failed marking ${seededKey}`, e);
+        }
         await markCloudInitialized();
 
         const items: T[] = snapshot.docs
@@ -226,6 +308,9 @@ export function subscribeCollection<T extends { id: string }>(
 }
 
 export function cleanUndefined<T>(obj: T): T {
+  if (typeof obj === 'number') {
+    return (Number.isFinite(obj) ? obj : 0) as unknown as T;
+  }
   if (obj === null || obj === undefined || typeof obj !== 'object') {
     return obj;
   }
@@ -245,6 +330,7 @@ export async function saveDocument<T extends { id: string }>(
   collectionName: string,
   item: T
 ) {
+  if (!item?.id) return;
   unmarkDeletedId(collectionName, item.id);
   try {
     const cleanedItem = cleanUndefined(item);
@@ -258,14 +344,15 @@ export async function saveDocuments<T extends { id: string }>(
   collectionName: string,
   items: T[]
 ) {
-  if (!items || items.length === 0) return;
+  const validItems = (items || []).filter((item) => Boolean(item?.id));
+  if (validItems.length === 0) return;
 
-  const ids = items.map((i) => i.id);
+  const ids = validItems.map((i) => i.id);
   unmarkDeletedIds(collectionName, ids);
 
   const BATCH_SIZE = 400; // Firestore limit is 500
-  for (let i = 0; i < items.length; i += BATCH_SIZE) {
-    const chunk = items.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < validItems.length; i += BATCH_SIZE) {
+    const chunk = validItems.slice(i, i + BATCH_SIZE);
     try {
       const batch = writeBatch(db);
       for (const item of chunk) {
@@ -285,6 +372,7 @@ export async function saveDocuments<T extends { id: string }>(
 }
 
 export async function removeDocument(collectionName: string, id: string) {
+  if (!id) return;
   recordDeletedId(collectionName, id);
   const storageKey = getStorageKey(collectionName);
   try {

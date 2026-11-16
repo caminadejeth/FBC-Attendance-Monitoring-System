@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { AttendanceSummaryDaily, BiometricPunch, PayrollPeriodSummary, SyncLog, User } from '../types';
+import { resolveSummaryBranch } from './timeFormatters';
 
 export interface GoogleSheetsPayload {
   rawLogs: Array<{
@@ -65,7 +66,7 @@ export function buildGoogleSheetsData(
   const dailySummaries = summaries.map((s) => ({
     'Employee ID': s.employeeId,
     'Employee Name': s.employeeName,
-    'Department': s.department,
+    'Department': resolveSummaryBranch(s, users),
     'Date': s.date,
     'Weekday': s.weekday,
     'First Clock In': s.firstIn || '--',

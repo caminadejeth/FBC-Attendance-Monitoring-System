@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { User, AttendanceSummaryDaily, DisputeRequest, BiometricPunch } from '../types';
 import {
   formatDateMDYYYY,
@@ -8,6 +8,7 @@ import {
   calculateGrossHours,
   getFilteredSummariesWithAbsents,
   parseToYYYYMMDD,
+  resolveSummaryBranch,
 } from '../utils/timeFormatters';
 import { isFieldAdjusted, getAdjustedDisplayTime } from '../utils/adjustmentHelper';
 import { showExportToast, yellowCabSwal } from '../utils/sweetAlerts';
@@ -26,6 +27,7 @@ import {
   Filter,
   Award,
   ChevronDown,
+  X,
 } from 'lucide-react';
 
 interface EmployeeDtrSheetProps {
@@ -48,9 +50,43 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
     currentUser?.employeeId || activeUsers[0]?.employeeId || ''
   );
 
+  // Sync selectedEmployeeId if users load asynchronously
+  useEffect(() => {
+    if (!selectedEmployeeId && (currentUser?.employeeId || activeUsers[0]?.employeeId)) {
+      setSelectedEmployeeId(currentUser?.employeeId || activeUsers[0]?.employeeId || '');
+    } else if (
+      selectedEmployeeId &&
+      users.length > 0 &&
+      !users.some((u) => u.employeeId === selectedEmployeeId)
+    ) {
+      setSelectedEmployeeId(currentUser?.employeeId || activeUsers[0]?.employeeId || users[0]?.employeeId || '');
+    }
+  }, [users, activeUsers, currentUser, selectedEmployeeId]);
+
   // Search input term for employee selection
   const [employeeSearchTerm, setEmployeeSearchTerm] = useState<string>('');
   const [showEmployeeDropdown, setShowEmployeeDropdown] = useState<boolean>(false);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!showEmployeeDropdown) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowEmployeeDropdown(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowEmployeeDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showEmployeeDropdown]);
 
   // Date Range Presets
   const [payPeriodPreset, setPayPeriodPreset] = useState<string>('ALL_UPLOADED');
@@ -188,7 +224,7 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
       return {
         'Employee ID': selectedUser.employeeId,
         'Employee Name': selectedUser.name,
-        Branch: s.branch || selectedUser.branch || selectedUser.department || 'Main Branch',
+        Branch: resolveSummaryBranch(s, users, selectedUser),
         Department: selectedUser.department,
         Date: formatDateMDYYYY(s.date),
         Day: s.weekday,
@@ -265,16 +301,16 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
               onClick={handlePrintDtr}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs transition-colors cursor-pointer"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs transition-colors cursor-pointer whitespace-nowrap"
             >
               <Printer className="w-4 h-4" /> Print DTR Sheet
             </button>
             <button
               onClick={handleExportExcel}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-800 font-bold text-xs shadow-2xs transition-colors cursor-pointer"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-800 font-bold text-xs shadow-2xs transition-colors cursor-pointer whitespace-nowrap"
             >
               <Download className="w-4 h-4 text-emerald-700" /> Export Excel
             </button>
@@ -284,7 +320,7 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
         {/* SEARCH EMPLOYEE & PAY PERIOD CONTROLS */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
           {/* Employee Search & Select Box */}
-          <div className="md:col-span-5 relative">
+          <div className="md:col-span-5 relative" ref={dropdownRef}>
             <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1">
               Search Employee Name / ID:
             </label>
@@ -299,12 +335,26 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
                   setShowEmployeeDropdown(true);
                 }}
                 placeholder="Search employee name or ID (e.g. Juan, YC-1002)..."
-                className="w-full pl-9 pr-9 py-2 border-2 border-amber-300 rounded-xl text-xs font-bold text-gray-900 bg-amber-50/30 focus:ring-2 focus:ring-amber-500 focus:bg-white focus:outline-none"
+                className="w-full pl-9 pr-14 py-2 border-2 border-amber-300 rounded-xl text-xs font-bold text-gray-900 bg-amber-50/30 focus:ring-2 focus:ring-amber-500 focus:bg-white focus:outline-none"
               />
+              {employeeSearchTerm && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmployeeSearchTerm('');
+                    setShowEmployeeDropdown(true);
+                  }}
+                  className="absolute right-8 top-2.5 text-gray-400 hover:text-gray-700 cursor-pointer"
+                  aria-label="Clear search"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setShowEmployeeDropdown(!showEmployeeDropdown)}
                 className="absolute right-3 top-2.5 text-gray-500 hover:text-gray-800 cursor-pointer"
+                aria-label="Toggle employee list"
               >
                 <ChevronDown className="w-4 h-4" />
               </button>
@@ -462,7 +512,7 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
           <div>
             <span className="text-[10px] uppercase font-black text-gray-500 tracking-wider block">Branch / Department:</span>
             <span className="text-sm font-bold text-zinc-800">
-              {selectedUser.branch || selectedUser.department || 'Main Branch'}
+              {selectedUser.department || selectedUser.branch || 'Main Branch'}
             </span>
           </div>
 
@@ -472,8 +522,106 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
           </div>
         </div>
 
-        {/* DTR ATTENDANCE LOG TABLE */}
-        <div className="overflow-x-auto border-2 border-zinc-900 rounded-xl">
+        {/* DTR MOBILE DAILY CARDS VIEW (Screen only, <md) */}
+        <div className="md:hidden print:hidden space-y-2.5">
+          {employeeDtrLogs.length === 0 ? (
+            <div className="p-6 text-center text-gray-400 italic font-bold text-xs border-2 border-zinc-900 rounded-xl">
+              No attendance logs recorded for this employee during selected date range.
+            </div>
+          ) : (
+            employeeDtrLogs.map((s) => {
+              const breakTimes = getBreakTimes(s.punches);
+              const isAbsent = s.status === 'ABSENT';
+              const hasClockIn = Boolean(s.firstIn && s.firstIn !== 'No Data' && s.firstIn !== '--');
+              const hasClockOut = Boolean(s.lastOut && s.lastOut !== 'No Data' && s.lastOut !== '--');
+              const hasBreakOut = Boolean(breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--');
+              const hasBreakIn = Boolean(breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--');
+              const missingPunches: string[] = [];
+              if (!isAbsent) {
+                if (!hasClockIn) missingPunches.push('In');
+                if (!hasBreakOut) missingPunches.push('Brk-Out');
+                if (!hasBreakIn) missingPunches.push('Brk-In');
+                if (!hasClockOut) missingPunches.push('Out');
+              }
+              const clockInVal = getAdjustedDisplayTime(s, 'firstIn', disputes) || s.firstIn;
+              const breakOutVal = getAdjustedDisplayTime(s, 'breakOut', disputes) || s.breakOut;
+              const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
+              const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
+
+              return (
+                <div key={`mob-${s.id}`} className="border-2 border-zinc-900 rounded-xl p-3 bg-white space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-mono font-black text-xs text-zinc-950">
+                        {formatDateMDYYYY(s.date)} · {s.weekday}
+                      </div>
+                      <div className="text-[11px] font-bold text-zinc-600 mt-0.5">
+                        {resolveSummaryBranch(s, users, selectedUser)}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="font-mono font-black text-xs text-zinc-950 tabular-nums block">
+                        {s.netHoursWorked ? `${s.netHoursWorked.toFixed(1)} hrs` : '0.0 hrs'}
+                      </span>
+                      {isAbsent ? (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-rose-100 text-rose-900 border border-rose-300">
+                          Absent
+                        </span>
+                      ) : missingPunches.length > 0 ? (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-100 text-amber-950 border border-amber-400">
+                          Missing {missingPunches.join(', ')}
+                        </span>
+                      ) : (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
+                          {s.status}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 bg-zinc-50 rounded-lg p-2 border border-zinc-200 text-[11px] font-mono">
+                    <div>
+                      <span className="text-[9px] font-sans font-bold uppercase text-zinc-500 block">Clock In</span>
+                      <span className="font-bold text-zinc-900">
+                        {clockInVal ? formatTime12Hr(clockInVal) : <span className="text-rose-600">No Data</span>}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-sans font-bold uppercase text-zinc-500 block">Clock Out</span>
+                      <span className="font-bold text-zinc-900">
+                        {clockOutVal ? formatTime12Hr(clockOutVal) : <span className="text-rose-600">No Data</span>}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-sans font-bold uppercase text-zinc-500 block">Break Out</span>
+                      <span className="text-zinc-700">
+                        {breakOutVal ? formatTime12Hr(breakOutVal) : breakTimes.breakOut || 'No Data'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-sans font-bold uppercase text-zinc-500 block">Break In</span>
+                      <span className="text-zinc-700">
+                        {breakInVal ? formatTime12Hr(breakInVal) : breakTimes.breakIn || 'No Data'}
+                      </span>
+                    </div>
+                  </div>
+                  {(s.undertimeHours > 0 || s.overtimeHours > 0) && (
+                    <div className="flex items-center gap-3 text-[11px] font-mono font-bold">
+                      {s.undertimeHours > 0 && (
+                        <span className="text-amber-800">UT: -{s.undertimeHours.toFixed(1)}h</span>
+                      )}
+                      {s.overtimeHours > 0 && (
+                        <span className="text-sky-800">OT: +{s.overtimeHours.toFixed(1)}h</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* DTR ATTENDANCE LOG TABLE (Desktop & Print) */}
+        <div className="hidden md:block print:block overflow-x-auto border-2 border-zinc-900 rounded-xl">
           <table className="w-full text-left text-xs min-w-[950px]">
             <thead className="bg-zinc-900 text-amber-400 font-black uppercase text-[11px] tracking-wider border-b-2 border-zinc-900">
               <tr>
@@ -534,7 +682,7 @@ export const EmployeeDtrSheet: React.FC<EmployeeDtrSheetProps> = ({
                       </td>
                       <td className="p-2.5 font-bold text-zinc-800 whitespace-nowrap">
                         <span className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-300 text-[11px] font-bold text-zinc-900">
-                          {s.branch || selectedUser.branch || selectedUser.department || 'Main Branch'}
+                          {resolveSummaryBranch(s, users, selectedUser)}
                         </span>
                       </td>
                       <td className="p-2.5 text-center font-mono font-bold whitespace-nowrap">

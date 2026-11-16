@@ -3,7 +3,7 @@ import { DatePickerInput } from './DatePickerInput';
 import { AttendanceSummaryDaily, CtoManualAdjustment, CtoRequest, DisputeRequest, User } from '../types';
 import { TimeAdjustmentModal } from './TimeAdjustmentModal';
 import { getUserCtoStats } from '../utils/ctoHelper';
-import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, parseToYYYYMMDD, formatRealtimeTimestamp } from '../utils/timeFormatters';
+import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, parseToYYYYMMDD, formatRealtimeTimestamp, resolveSummaryBranch } from '../utils/timeFormatters';
 import { isFieldAdjusted, getAdjustedDisplayTime } from '../utils/adjustmentHelper';
 import {
   showConfirmDisputeAlert,
@@ -13,6 +13,7 @@ import {
   showErrorAlert,
   showRemarkPromptAlert,
   showActionSuccessToast,
+  yellowCabSwal,
 } from '../utils/sweetAlerts';
 import {
   Calendar,
@@ -35,6 +36,7 @@ import * as XLSX from 'xlsx';
 
 interface PersonalPunchesTableProps {
   currentUser: User;
+  users?: User[];
   summaries: AttendanceSummaryDaily[];
   disputes?: DisputeRequest[];
   ctoRequests: CtoRequest[];
@@ -46,6 +48,7 @@ interface PersonalPunchesTableProps {
 
 export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
   currentUser,
+  users = [],
   summaries,
   disputes = [],
   ctoRequests,
@@ -127,7 +130,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
   const totalWorkedFiltered = filteredSummaries.reduce((sum, s) => sum + (s.netHoursWorked || 0), 0);
 
   // Submit CTO Request (Credit or Leave)
-  const handleFormSubmitCto = (e: React.FormEvent) => {
+  const handleFormSubmitCto = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ctoReason.trim()) {
       showErrorAlert('Missing Reason', `Please enter a reason for your CTO ${ctoRequestType === 'CREDIT' ? 'credit' : 'leave'} request.`);
@@ -135,10 +138,15 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
     }
 
     if (ctoRequestType === 'LEAVE' && ctoHours > ctoStats.availableBalance) {
-      showErrorAlert(
-        'Insufficient Balance Warning',
-        `You requested ${ctoHours} hrs leave, but only have ${ctoStats.availableBalance.toFixed(1)} hrs available CTO balance. Your request will require special Payroll approval.`
-      );
+      const confirmResult = await yellowCabSwal.fire({
+        icon: 'warning',
+        title: 'Exceeds Available CTO Balance',
+        text: `You requested ${ctoHours} hrs leave, but only have ${ctoStats.availableBalance.toFixed(1)} hrs available CTO balance. Do you still want to submit for special Payroll approval?`,
+        showCancelButton: true,
+        confirmButtonText: 'Submit Anyway',
+        cancelButtonText: 'Cancel',
+      });
+      if (!confirmResult.isConfirmed) return;
     }
 
     onSubmitCtoRequest({
@@ -178,6 +186,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
     const exportData = filteredSummaries.map((s) => ({
       Date: s.date,
       Weekday: s.weekday,
+      Branch: resolveSummaryBranch(s, users, currentUser),
       'Time-In': s.firstIn || '--',
       'Break-Out': s.breakOut || '--',
       'Break-In': s.breakIn || '--',
@@ -295,9 +304,9 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
 
       {/* Main Personal Attendance Log Table */}
       <div className="bg-white rounded-2xl border-2 border-zinc-950 overflow-hidden shadow-xl">
-        <div className="p-4 bg-zinc-900 text-white flex items-center justify-between border-b-2 border-zinc-950">
+        <div className="p-4 bg-zinc-900 text-white flex flex-wrap items-center justify-between gap-2 border-b-2 border-zinc-950">
           <div className="flex items-center gap-2">
-            <Clock className="w-4 h-4 text-amber-400" />
+            <Clock className="w-4 h-4 text-amber-400 shrink-0" />
             <h3 className="font-black uppercase tracking-tight text-xs text-amber-400">
               Personal Attendance & Punch History ({filteredSummaries.length} Records)
             </h3>
@@ -307,7 +316,159 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
           </span>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobile Cards View */}
+        <div className="md:hidden divide-y divide-zinc-200">
+          {filteredSummaries.length === 0 ? (
+            <div className="py-10 px-4 text-center text-zinc-500 bg-zinc-50">
+              <p className="font-extrabold text-sm text-zinc-700">No attendance logs found for selected date range.</p>
+              <p className="text-xs mt-1 text-zinc-500">Try adjusting your date filters or upload recent ZKTeco biometric exports.</p>
+            </div>
+          ) : (
+            <>
+              {filteredSummaries.map((s) => {
+                const hasCto = (s.ctoHoursEarned || 0) > 0;
+                const isAbsent = s.status === 'ABSENT';
+                const hasClockIn = Boolean(s.firstIn && s.firstIn !== 'No Data' && s.firstIn !== '--');
+                const hasClockOut = Boolean(s.lastOut && s.lastOut !== 'No Data' && s.lastOut !== '--');
+                const hasBreakOut = Boolean(s.breakOut && s.breakOut !== 'No Data' && s.breakOut !== '--');
+                const hasBreakIn = Boolean(s.breakIn && s.breakIn !== 'No Data' && s.breakIn !== '--');
+                const missingPunches: string[] = [];
+                if (!isAbsent) {
+                  if (!hasClockIn) missingPunches.push('Clock-In');
+                  if (!hasBreakOut) missingPunches.push('Break-Out');
+                  if (!hasBreakIn) missingPunches.push('Break-In');
+                  if (!hasClockOut) missingPunches.push('Clock-Out');
+                }
+                const clockInVal = getAdjustedDisplayTime(s, 'firstIn', disputes) || s.firstIn;
+                const breakOutVal = getAdjustedDisplayTime(s, 'breakOut', disputes) || s.breakOut;
+                const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
+                const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
+
+                return (
+                  <div key={s.id} className="p-3.5 space-y-2.5 bg-white">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-sm text-zinc-950">
+                          {formatDateWithDay(s.date, s.weekday)}
+                        </div>
+                        <div className="text-[11px] font-semibold text-zinc-600 mt-0.5">
+                          {resolveSummaryBranch(s, users, currentUser)}
+                        </div>
+                      </div>
+                      <div className="shrink-0">
+                        {s.status === 'LEAVE' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-400 text-zinc-950 border border-amber-600">
+                            Leave (CTO)
+                          </span>
+                        ) : isAbsent ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-950 border border-rose-300">
+                            ✕ Absent
+                          </span>
+                        ) : missingPunches.length > 0 ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-950 border border-amber-400">
+                            ⚡ Missing {missingPunches.length}
+                          </span>
+                        ) : s.status === 'COMPLETE' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
+                            ✓ Complete
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                            {s.status}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 bg-zinc-50 rounded-xl p-2.5 border border-zinc-200 text-[11px]">
+                      <div>
+                        <span className="text-[10px] font-bold uppercase text-zinc-400 block">Time-In</span>
+                        <span className="font-mono font-bold text-zinc-900">
+                          {clockInVal ? formatTime12Hr(clockInVal) : <span className="text-rose-500">No Data</span>}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold uppercase text-zinc-400 block">Time-Out</span>
+                        <span className="font-mono font-bold text-zinc-900">
+                          {clockOutVal ? formatTime12Hr(clockOutVal) : <span className="text-rose-500">No Data</span>}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold uppercase text-zinc-400 block">Break Out</span>
+                        <span className="font-mono text-zinc-700">
+                          {breakOutVal ? formatTime12Hr(breakOutVal) : 'No Data'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold uppercase text-zinc-400 block">Break In</span>
+                        <span className="font-mono text-zinc-700">
+                          {breakInVal ? formatTime12Hr(breakInVal) : 'No Data'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <span className="text-zinc-600 text-[11px] font-medium">
+                        {s.anomalies.length > 0 ? s.anomalies.join(' | ') : 'Normal Shift'}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5 ml-auto">
+                        {hasCto && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenCreditModal(s)}
+                            className="inline-flex items-center gap-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-950 px-2 py-1 rounded-full border border-emerald-300 text-[10px] font-black whitespace-nowrap cursor-pointer"
+                          >
+                            <Sparkles className="w-3 h-3 text-emerald-600" />
+                            +{(s.ctoHoursEarned || 0).toFixed(1)}h CTO
+                          </button>
+                        )}
+                        {onSubmitDispute && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedSummaryForDispute(s);
+                              setShowDisputeModal(true);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-100 border border-amber-300 text-[10px] font-bold text-amber-950 whitespace-nowrap cursor-pointer"
+                          >
+                            <AlertCircle className="w-3 h-3" /> Adjust
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const res = await showRemarkPromptAlert(
+                              s.employeeName || currentUser.name,
+                              formatDateWithDay(s.date, s.weekday),
+                              s.anomalies.join(' | ')
+                            );
+                            if (res.isConfirmed && res.value !== undefined) {
+                              if (onUpdateSummaryAnomaly) {
+                                onUpdateSummaryAnomaly(s.id, res.value);
+                                showActionSuccessToast('Anomalies / Note updated!');
+                              }
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-zinc-100 border border-zinc-300 text-[10px] font-bold text-zinc-900 whitespace-nowrap cursor-pointer"
+                        >
+                          <MessageSquare className="w-3 h-3 text-amber-600" /> Notes
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="p-3.5 bg-zinc-950 text-white flex items-center justify-between text-xs font-black uppercase">
+                <span>Total Potential CTO Eligible:</span>
+                <span className="font-mono text-emerald-400 tabular-nums">
+                  +{totalCtoFiltered.toFixed(1)} hrs
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table id="personal-punches-table" className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-amber-400 text-zinc-950 font-black uppercase text-[11px] border-b-2 border-zinc-950 tracking-wider">
@@ -362,7 +523,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                       {/* Branch */}
                       <td className="py-3 px-4 text-xs font-semibold text-zinc-800 whitespace-nowrap">
                         <span className="bg-zinc-100 text-zinc-800 px-2 py-0.5 rounded border border-zinc-300 font-medium">
-                          {s.branch || s.department || 'Main Branch'}
+                          {resolveSummaryBranch(s, users, currentUser)}
                         </span>
                       </td>
 
@@ -507,10 +668,8 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                                 if (res.isConfirmed && res.value !== undefined) {
                                   if (onUpdateSummaryAnomaly) {
                                     onUpdateSummaryAnomaly(s.id, res.value);
-                                  } else {
-                                    s.anomalies = [res.value.trim()];
+                                    showActionSuccessToast('Anomalies / Note updated!');
                                   }
-                                  showActionSuccessToast('Anomalies / Note updated!');
                                 }
                               }}
                               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-100 hover:bg-amber-100 border border-zinc-300 text-[10px] font-bold text-zinc-900 shrink-0 transition-colors shadow-2xs cursor-pointer"
@@ -530,10 +689,10 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
             {filteredSummaries.length > 0 && (
               <tfoot>
                 <tr className="bg-zinc-950 text-white font-black uppercase text-xs border-t-2 border-zinc-950">
-                  <td colSpan={6} className="py-3 px-4 text-right tracking-wider">
+                  <td colSpan={7} className="py-3 px-4 text-right tracking-wider">
                     Total Potential CTO Eligible:
                   </td>
-                  <td className="py-3 px-4 text-center font-mono text-emerald-400">
+                  <td className="py-3 px-4 text-center font-mono text-emerald-400 tabular-nums">
                     +{totalCtoFiltered.toFixed(1)} hrs
                   </td>
                   <td className="py-3 px-4"></td>

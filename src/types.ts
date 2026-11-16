@@ -243,3 +243,131 @@ export interface WorkSchedule {
   updatedAt: string;
   updatedBy: string;
 }
+
+// Warehouse Inventory Management & Stock Transfers (STR) Types
+export type WarehouseBranchCode =
+  | 'YC-EBLC'
+  | 'YC-RMOS'
+  | 'YC-TLSY'
+  | 'YC-CBA'
+  | 'YC-CEB'
+  | 'YC-SMSC'
+  | 'YC-EBLC-STORE'
+  | 'YC-RMOS-STORE'
+  | 'YC-TLSY-STORE'
+  | 'YC-CBA-STORE'
+  | 'YC-CEB-STORE'
+  | 'YC-SMSC-STORE';
+
+export interface WarehouseBranchInfo {
+  code: WarehouseBranchCode;
+  name: string;
+  strPrefix: string;
+  branchType?: 'WAREHOUSE' | 'STORE';
+  isMonitored?: boolean;
+}
+
+export interface WarehouseCategory {
+  id: string;
+  name: string;
+  sortOrder?: number;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export type StockMovementType =
+  | 'STOCK_IN'
+  | 'STOCK_OUT'
+  | 'TRANSFER_IN'
+  | 'TRANSFER_OUT';
+
+export interface WarehouseInventoryItem {
+  id: string;
+  itemCode?: string;
+  description: string;
+  category: string;
+  batchNo: string;
+  uom: string;
+  unitPrice: number;
+  branchCode: WarehouseBranchCode;
+  branchName: string;
+  quantity: number;
+  reorderLevel?: number;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export type StockMovementStatus =
+  | 'PENDING'
+  | 'RECEIVED'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export interface StockMovementEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  timestamp: string; // ISO string
+  movementType: StockMovementType;
+  status?: StockMovementStatus;
+  branchCode: WarehouseBranchCode;
+  branchName: string;
+  counterpartyBranchCode?: WarehouseBranchCode;
+  counterpartyBranchName?: string;
+  fromBranchCode?: WarehouseBranchCode | string;
+  fromBranchName?: string;
+  toBranchCode?: WarehouseBranchCode | string;
+  toBranchName?: string;
+  itemId: string;
+  itemCode?: string;
+  description: string;
+  category: string;
+  batchNo: string;
+  uom: string;
+  unitPrice: number;
+  quantity: number;
+  previousQty: number;
+  newQty: number;
+  refNumber: string; // STR Ref # or Stock In/Out Ref #
+  transferNumber?: string;
+  performedBy: string;
+  notes?: string;
+}
+
+export interface StockTransferLineItem {
+  id: string;
+  itemId?: string;
+  itemCode?: string;
+  description: string;
+  category: string;
+  batchNo: string;
+  uom: string;
+  unitPrice: number;
+  quantity: number;
+  itemStatus?: 'APPROVED' | 'CANCELLED';
+  cancelReason?: string;
+}
+
+export interface StockTransferRequisition {
+  id: string;
+  transferNumber: string; // e.g. TRF-20261115-001
+  strRefNumber: string;   // e.g. STR E-0001
+  date: string;           // YYYY-MM-DD
+  fromBranchCode: WarehouseBranchCode; // Issuing Branch
+  fromBranchName: string;
+  toBranchCode: WarehouseBranchCode;   // Requesting Branch
+  toBranchName: string;
+  items: StockTransferLineItem[];
+  preparedBy: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewedByUserId?: string;
+  receivedBy: string;
+  receivedAt?: string;
+  receivedByUserId?: string;
+  receivedByRole?: string;
+  remarks?: string;
+  status: 'PENDING' | 'RECEIVED' | 'COMPLETED' | 'CANCELLED';
+  createdAt: string;
+  createdByUserId?: string;
+}
+

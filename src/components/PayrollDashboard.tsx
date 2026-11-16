@@ -8,7 +8,7 @@ import { WorkScheduleManager } from './WorkScheduleManager';
 import { AttendanceSummaryDaily, CtoManualAdjustment, CtoRequest, User, BiometricPunch, DisputeRequest, WorkSchedule, ActivityLog } from '../types';
 import { buildGoogleSheetsData } from '../utils/googleSheetsSync';
 import { getUserCtoStats } from '../utils/ctoHelper';
-import { formatDateMDYY, formatDateMDYYYY, formatDateWithDay, formatTime12Hr, getFilteredSummariesWithAbsents, getBreakTimes, calculateGrossHours, formatRealtimeTimestamp } from '../utils/timeFormatters';
+import { formatDateMDYY, formatDateMDYYYY, formatDateWithDay, formatTime12Hr, getFilteredSummariesWithAbsents, getBreakTimes, calculateGrossHours, formatRealtimeTimestamp, resolveSummaryBranch } from '../utils/timeFormatters';
 import { isFieldAdjusted, getAdjustedDisplayTime } from '../utils/adjustmentHelper';
 import { exportDisputesToPdf } from '../utils/pdfExportHelper';
 import {
@@ -57,6 +57,7 @@ import {
 } from 'lucide-react';
 
 interface PayrollDashboardProps {
+  currentUser?: User;
   users: User[];
   summaries: AttendanceSummaryDaily[];
   disputes?: DisputeRequest[];
@@ -80,6 +81,7 @@ interface PayrollDashboardProps {
 }
 
 export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
+  currentUser,
   users,
   summaries,
   disputes = [],
@@ -182,8 +184,6 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
       const remarkText = result.value.trim();
       if (onUpdateSummaryAnomaly) {
         onUpdateSummaryAnomaly(s.id, remarkText);
-      } else {
-        s.anomalies = remarkText ? [remarkText] : [];
       }
       if (onSubmitDispute && remarkText) {
         onSubmitDispute({
@@ -213,7 +213,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
     // Show SweetAlert processing dialog
     showUploadProcessingAlert(file.name);
 
-    const result = await parseAndCleanBiometricExcel(file);
+    const result = await parseAndCleanBiometricExcel(file, users);
     setIsProcessing(false);
 
     if (result.isValid) {
@@ -290,6 +290,15 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
     setAdjustmentAmount(1.0);
   };
 
+  const findUserForSummary = (employeeId: string): User | undefined => {
+    const upper = employeeId.trim().toUpperCase();
+    const exact = users.find((u) => u.employeeId.trim().toUpperCase() === upper);
+    if (exact) return exact;
+    const numOnly = upper.replace(/\D/g, '');
+    if (!numOnly) return undefined;
+    return users.find((u) => u.employeeId.replace(/\D/g, '') === numOnly);
+  };
+
   // Filter summaries based on date range with Absents & Lacking generated
   const rangeSummaries = getFilteredSummariesWithAbsents(
     summaries,
@@ -299,7 +308,13 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
   );
 
   const filteredSummaries = rangeSummaries.filter((s) => {
-    const inDept = selectedDept === 'ALL' || s.department === selectedDept;
+    const empUser = findUserForSummary(s.employeeId);
+    const resolvedBranch = resolveSummaryBranch(s, users, empUser);
+    const inDept =
+      selectedDept === 'ALL' ||
+      resolvedBranch === selectedDept ||
+      empUser?.department === selectedDept ||
+      s.department === selectedDept;
     const matchesSearch =
       s.employeeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       s.employeeId.toLowerCase().includes(searchTerm.toLowerCase());
@@ -331,7 +346,9 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
 
   // Export Attendance Hours Summary File
   const handleExportPayslipSummary = () => {
-    const filename = `FBC_Attendance_Hours_Summary_${payPeriodStart}_to_${payPeriodEnd}.xlsx`;
+    const rangeLabel =
+      payPeriodStart && payPeriodEnd ? `${payPeriodStart}_to_${payPeriodEnd}` : 'All_Dates';
+    const filename = `FBC_Attendance_Hours_Summary_${rangeLabel}.xlsx`;
     const ws = XLSX.utils.json_to_sheet(payrollItems);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Attendance Hours Summary');
@@ -348,7 +365,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
       {activeTab === 'schedules' && (
         <div className="space-y-6">
           <WorkScheduleManager
-            currentUser={users[0]}
+            currentUser={currentUser || users[0]}
             users={users}
             schedules={schedules}
             ctoRequests={ctoRequests}
@@ -366,13 +383,14 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
           summaries={summaries}
           disputes={disputes}
           punches={punches}
+          currentUser={currentUser}
         />
       )}
 
       {/* ZKTECO OLD VERSION .DAT FILE UPLOADER FOR PAYROLL */}
       {activeTab === 'upload-dat' && (
         <div className="space-y-6 animate-in fade-in">
-          <ZktecoDatUploader users={users} onUploadProcessed={onUploadProcessed || (() => {})} />
+          <ZktecoDatUploader users={users} currentUser={currentUser} onUploadProcessed={onUploadProcessed || (() => {})} />
         </div>
       )}
 
@@ -623,8 +641,160 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
               </div>
             </div>
 
-            {/* Table Area Maximized with Compact Padding */}
-            <div className="overflow-x-auto border border-gray-200 rounded-xl shadow-2xs">
+            {/* Mobile Biometric Daily Attendance Cards */}
+            <div className="md:hidden space-y-2.5">
+              {paginatedDailySummaries.length === 0 ? (
+                <div className="p-6 text-center text-xs text-gray-400 border border-dashed border-gray-200 rounded-xl bg-gray-50/50">
+                  No matching attendance records found for selected period.
+                </div>
+              ) : (
+                paginatedDailySummaries.map((s) => {
+                  const breakTimes = getBreakTimes(s.punches);
+                  const grossHours = calculateGrossHours(s.firstIn, s.lastOut);
+                  const existingDispute = disputes.find(
+                    (d) => d.employeeId === s.employeeId && d.targetDate === s.date
+                  );
+                  const isAbsent = s.status === 'ABSENT';
+                  const hasClockIn = Boolean(s.firstIn && s.firstIn !== 'No Data' && s.firstIn !== '--');
+                  const hasClockOut = Boolean(s.lastOut && s.lastOut !== 'No Data' && s.lastOut !== '--');
+                  const hasBreakOut = Boolean(breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--');
+                  const hasBreakIn = Boolean(breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--');
+                  const missingPunches: string[] = [];
+                  if (!isAbsent) {
+                    if (!hasClockIn) missingPunches.push('Clock-In');
+                    if (!hasBreakOut) missingPunches.push('Break-Out');
+                    if (!hasBreakIn) missingPunches.push('Break-In');
+                    if (!hasClockOut) missingPunches.push('Clock-Out');
+                  }
+                  const clockInVal = getAdjustedDisplayTime(s, 'firstIn', disputes) || s.firstIn;
+                  const breakOutVal = getAdjustedDisplayTime(s, 'breakOut', disputes) || s.breakOut;
+                  const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
+                  const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
+                  const empUser = findUserForSummary(s.employeeId);
+                  const userDepartment = resolveSummaryBranch(s, users, empUser);
+
+                  return (
+                    <div key={`mob-pay-${s.id}`} className="rounded-xl border border-gray-200 bg-white p-3.5 space-y-2.5 shadow-2xs">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-bold text-sm text-[#2C3524] truncate">{s.employeeName}</div>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                            <span className="font-mono text-[11px] font-bold text-gray-600">{s.employeeId}</span>
+                            <span className="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-[10px] font-bold text-amber-900">
+                              {userDepartment}
+                            </span>
+                          </div>
+                          <div className="font-mono font-bold text-[11px] text-[#2C3524] mt-0.5">
+                            {formatDateMDYYYY(s.date)} · {s.weekday}
+                          </div>
+                        </div>
+                        <div className="shrink-0">
+                          {isAbsent ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-950 border border-rose-300 whitespace-nowrap">
+                              ✕ Absent
+                            </span>
+                          ) : missingPunches.length > 0 ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-950 border border-amber-400">
+                              ⚡ Missing {missingPunches.length}
+                            </span>
+                          ) : s.status === 'COMPLETE' ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300 whitespace-nowrap">
+                              ✓ Complete
+                            </span>
+                          ) : s.status === 'UNDERTIME' ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300 whitespace-nowrap">
+                              ⚠ Undertime
+                            </span>
+                          ) : s.status === 'OVERTIME' ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-sky-100 text-sky-900 border border-sky-300 whitespace-nowrap">
+                              ★ Overtime
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-gray-100 text-gray-800 border border-gray-300 whitespace-nowrap">
+                              {s.status}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-1.5 text-[11px] font-mono bg-[#F7F8F5] p-2 rounded-lg border border-[#D3D8C8]/70">
+                        <div>
+                          <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Clock In</span>
+                          {isFieldAdjusted(s, 'firstIn', disputes) ? (
+                            <span className="adjusted-time-blinking">{clockInVal ? formatTime12Hr(clockInVal) : '08:00 AM'} Adj</span>
+                          ) : clockInVal ? formatTime12Hr(clockInVal) : <span className="text-rose-500 font-bold">No Data</span>}
+                        </div>
+                        <div>
+                          <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Clock Out</span>
+                          {isFieldAdjusted(s, 'lastOut', disputes) ? (
+                            <span className="adjusted-time-blinking">{clockOutVal ? formatTime12Hr(clockOutVal) : '05:00 PM'} Adj</span>
+                          ) : clockOutVal ? formatTime12Hr(clockOutVal) : <span className="text-rose-500 font-bold">No Data</span>}
+                        </div>
+                        <div>
+                          <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Break Out</span>
+                          {isFieldAdjusted(s, 'breakOut', disputes) ? (
+                            <span className="adjusted-time-blinking">{breakOutVal ? formatTime12Hr(breakOutVal) : '12:00 PM'} Adj</span>
+                          ) : breakOutVal ? formatTime12Hr(breakOutVal) : breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--' ? breakTimes.breakOut : 'No Data'}
+                        </div>
+                        <div>
+                          <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Break In</span>
+                          {isFieldAdjusted(s, 'breakIn', disputes) ? (
+                            <span className="adjusted-time-blinking">{breakInVal ? formatTime12Hr(breakInVal) : '01:00 PM'} Adj</span>
+                          ) : breakInVal ? formatTime12Hr(breakInVal) : breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--' ? breakTimes.breakIn : 'No Data'}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-4 gap-1 text-center text-[11px] font-mono bg-gray-50 rounded-lg p-1.5 border border-gray-200">
+                        <div>
+                          <span className="block text-[9px] font-sans text-gray-500 uppercase">Break</span>
+                          <span className="font-bold text-gray-700">{s.totalBreakMinutes}m</span>
+                        </div>
+                        <div>
+                          <span className="block text-[9px] font-sans text-gray-500 uppercase">Gross</span>
+                          <span className="font-bold text-gray-700">{grossHours.toFixed(1)}h</span>
+                        </div>
+                        <div>
+                          <span className="block text-[9px] font-sans text-gray-500 uppercase">Worked</span>
+                          <span className="font-extrabold text-[#2C3524]">{s.netHoursWorked.toFixed(1)}h</span>
+                        </div>
+                        <div>
+                          <span className="block text-[9px] font-sans text-gray-500 uppercase">OT</span>
+                          <span className="font-bold text-sky-700">{s.overtimeHours > 0 ? `+${s.overtimeHours.toFixed(1)}h` : '0.0h'}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-gray-100">
+                        <div className="min-w-0 flex-1 text-[10px]">
+                          {existingDispute ? (
+                            <span className={`inline-block px-2 py-0.5 rounded-md font-bold ${existingDispute.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' : existingDispute.status === 'REJECTED' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-900 border border-amber-300'}`}>
+                              📌 {existingDispute.status}: {existingDispute.reason}
+                            </span>
+                          ) : missingPunches.length > 0 ? (
+                            <span className="inline-block px-2 py-0.5 rounded-md font-extrabold bg-amber-100 text-amber-950 border border-amber-300">
+                              ⚡ Missing {missingPunches.join(', ')}
+                            </span>
+                          ) : s.anomalies.length > 0 ? (
+                            <span className="text-gray-600">{s.anomalies.join('; ')}</span>
+                          ) : (
+                            <span className="text-gray-400 italic">No concerns</span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenRemarkPrompt(s)}
+                          className="text-[10px] font-extrabold text-amber-800 hover:text-zinc-950 bg-amber-100 hover:bg-amber-200 px-2 py-1 rounded-md border border-amber-400 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+                        >
+                          💬 Concern / Remark
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Table Area Maximized with Compact Padding (Desktop) */}
+            <div className="hidden md:block overflow-x-auto border border-gray-200 rounded-xl shadow-2xs">
               <table className="w-full text-left text-xs min-w-[1350px]">
                 <thead className="bg-[#F7F8F5] text-[#4A543E] font-bold uppercase tracking-wider border-b border-gray-200 text-[11px]">
                   <tr>
@@ -680,6 +850,9 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                       const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
                       const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
 
+                      const empUser = findUserForSummary(s.employeeId);
+                      const userDepartment = resolveSummaryBranch(s, users, empUser);
+
                       return (
                         <tr key={s.id} className="hover:bg-amber-50/40 transition-colors">
                           <td className="px-2.5 py-2 font-mono text-[11px] font-bold text-gray-600">
@@ -687,11 +860,11 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                           </td>
                           <td className="px-2.5 py-2">
                             <div className="font-bold text-[#2C3524] text-xs">{s.employeeName}</div>
-                            <div className="text-[10px] text-gray-400 font-medium">{s.department}</div>
+                            <div className="text-[10px] text-gray-400 font-medium">{empUser?.department || s.department}</div>
                           </td>
                           <td className="px-2.5 py-2 whitespace-nowrap">
                             <span className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-[11px] font-bold text-amber-900">
-                              {s.branch || s.department || 'Main Branch'}
+                              {userDepartment}
                             </span>
                           </td>
                           <td className="px-2.5 py-2 font-mono font-bold text-[#2C3524] whitespace-nowrap text-[11px]">
@@ -1012,7 +1185,52 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
               </div>
             </div>
 
-            <div className="overflow-x-auto border border-zinc-200 rounded-xl">
+            {/* Mobile CTO Directory Cards */}
+            <div className="md:hidden space-y-2.5">
+              {users.map((u) => {
+                const stats = getUserCtoStats(u.employeeId, summaries, ctoRequests, ctoAdjustments);
+                return (
+                  <div key={`mob-cto-${u.id}`} className="rounded-xl border border-zinc-200 bg-white p-3.5 space-y-2.5 shadow-2xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-bold text-sm text-zinc-950 truncate">{u.name}</div>
+                        <div className="text-[11px] font-mono text-zinc-500">{u.employeeId} · {u.department}</div>
+                      </div>
+                      <span className="bg-amber-100 text-amber-950 px-2.5 py-0.5 rounded-full border border-amber-300 font-mono font-black text-xs whitespace-nowrap shrink-0">
+                        {stats.availableBalance.toFixed(1)} hrs
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5 text-center text-[11px] font-mono bg-zinc-50 p-2 rounded-lg border border-zinc-200">
+                      <div>
+                        <span className="block text-[9.5px] font-sans text-zinc-500 uppercase">Earned</span>
+                        <span className="font-bold text-zinc-800">+{stats.earnedFromAttendance.toFixed(1)}h</span>
+                      </div>
+                      <div>
+                        <span className="block text-[9.5px] font-sans text-zinc-500 uppercase">Manual</span>
+                        <span className={`font-bold ${stats.manualAdjustments >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                          {stats.manualAdjustments >= 0 ? `+${stats.manualAdjustments.toFixed(1)}` : stats.manualAdjustments.toFixed(1)}h
+                        </span>
+                      </div>
+                      <div>
+                        <span className="block text-[9.5px] font-sans text-zinc-500 uppercase">Used</span>
+                        <span className="font-bold text-amber-800">-{stats.usedApproved.toFixed(1)}h</span>
+                      </div>
+                    </div>
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedUserForCto(u)}
+                        className="inline-flex items-center gap-1 bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-[11px] uppercase tracking-wider px-3 py-1.5 rounded-lg border border-zinc-950 cursor-pointer whitespace-nowrap"
+                      >
+                        <Edit className="w-3 h-3" /> Edit CTO Balance
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto border border-zinc-200 rounded-xl">
               <table className="w-full text-left text-xs">
                 <thead className="bg-zinc-900 text-amber-400 font-extrabold uppercase text-[10px] tracking-wider">
                   <tr>
@@ -1078,7 +1296,25 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                 </h4>
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="md:hidden space-y-2">
+                {ctoAdjustments.map((adj) => (
+                  <div key={`mob-adj-${adj.id}`} className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-3 space-y-1.5 text-xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-bold text-zinc-900 truncate">{adj.employeeName} ({adj.employeeId})</div>
+                        <div className="font-mono text-[10px] text-zinc-500">{formatRealtimeTimestamp(adj.timestamp)}</div>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-black shrink-0 ${adj.type === 'ADDITION' ? 'bg-emerald-100 text-emerald-900' : 'bg-rose-100 text-rose-900'}`}>
+                        {adj.amount >= 0 ? `+${adj.amount.toFixed(1)}` : adj.amount.toFixed(1)} hrs
+                      </span>
+                    </div>
+                    <div className="text-zinc-700">{adj.reason}</div>
+                    <div className="text-[10px] text-zinc-500">Adjusted by: {adj.adjustedBy}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left text-xs font-medium">
                   <thead>
                     <tr className="bg-zinc-100 text-zinc-700 font-extrabold uppercase text-[10px]">
@@ -1266,11 +1502,11 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   id="btn-export-pdf-disputes-payroll"
                   onClick={() => exportDisputesToPdf(filteredList, disputeBranchFilter)}
-                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-amber-400 font-black text-xs uppercase tracking-wider rounded-xl border border-amber-400/50 shadow-md flex items-center gap-1.5 cursor-pointer transition-colors"
+                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-amber-400 font-black text-xs uppercase tracking-wider rounded-xl border border-amber-400/50 shadow-md flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
                 >
                   <FileText className="w-4 h-4 text-amber-400" />
                   Export PDF (4/Page)
@@ -1278,7 +1514,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
 
                 <button
                   onClick={() => setShowAdjustmentModal(true)}
-                  className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider rounded-xl border border-zinc-950 shadow-md flex items-center gap-1.5 cursor-pointer transition-colors"
+                  className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider rounded-xl border border-zinc-950 shadow-md flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
                 >
                   <PlusCircle className="w-4 h-4 text-zinc-950" />
                   File Adjustment
@@ -1354,8 +1590,8 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                   >
                     {st === 'ALL' && `All (${disputes.length})`}
                     {st === 'PENDING' && `Pending (${pendingCount})`}
-                    {st === 'APPROVED' && `Approved (${approvedCount})`}
-                    {st === 'REJECTED' && `Rejected (${rejectedCount})`}
+                    {st === 'APPROVED' && `History / Approved (${approvedCount})`}
+                    {st === 'REJECTED' && `History / Rejected (${rejectedCount})`}
                   </button>
                 ))}
               </div>
@@ -1406,7 +1642,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                             : 'bg-rose-600 text-white shadow-2xs'
                         }`}
                       >
-                        {d.status}
+                        {d.status === 'APPROVED' ? 'APPROVED (HISTORY)' : d.status === 'REJECTED' ? 'REJECTED (HISTORY)' : d.status}
                       </span>
                     </div>
 

@@ -3,7 +3,7 @@ import { AttendanceSummaryDaily, CtoManualAdjustment, CtoRequest, User } from '.
 import { getUserCtoStats } from '../utils/ctoHelper';
 import { DatePickerInput } from './DatePickerInput';
 import { TablePagination } from './TablePagination';
-import { showSuccessAlert, showActionSuccessToast } from '../utils/sweetAlerts';
+import { showSuccessAlert, showActionSuccessToast, yellowCabSwal } from '../utils/sweetAlerts';
 import { formatDateWithDay, formatDateMDYY, formatRealtimeTimestamp } from '../utils/timeFormatters';
 import {
   Award,
@@ -65,18 +65,22 @@ export const CtoLeaveDashboard: React.FC<CtoLeaveDashboardProps> = ({
     setShowModal(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!requestReason.trim()) return;
 
     if (requestType === 'LEAVE' && requestHours > ctoStats.availableBalance) {
-      if (
-        !window.confirm(
-          `Requested ${requestHours}h exceeds your current available balance of ${ctoStats.availableBalance.toFixed(
-            1
-          )}h. Do you still wish to submit for Payroll review?`
-        )
-      ) {
+      const confirmResult = await yellowCabSwal.fire({
+        icon: 'warning',
+        title: 'Exceeds Available CTO Balance',
+        text: `Requested ${requestHours}h exceeds your current available balance of ${ctoStats.availableBalance.toFixed(
+          1
+        )}h. Do you still wish to submit for Payroll review?`,
+        showCancelButton: true,
+        confirmButtonText: 'Submit Anyway',
+        cancelButtonText: 'Cancel',
+      });
+      if (!confirmResult.isConfirmed) {
         return;
       }
     }
@@ -114,17 +118,17 @@ export const CtoLeaveDashboard: React.FC<CtoLeaveDashboardProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           <button
             onClick={() => handleOpenModal('LEAVE')}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 text-xs font-black border border-zinc-950 shadow-2xs transition-all cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 text-xs font-black border border-zinc-950 shadow-2xs transition-all cursor-pointer whitespace-nowrap"
           >
             <PlusCircle className="w-4 h-4" />
             File CTO Leave Request
           </button>
           <button
             onClick={() => handleOpenModal('CREDIT')}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#656D4A] hover:bg-[#4A543E] text-white text-xs font-bold shadow-2xs transition-all cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#656D4A] hover:bg-[#4A543E] text-white text-xs font-bold shadow-2xs transition-all cursor-pointer whitespace-nowrap"
           >
             <TrendingUp className="w-4 h-4" />
             Request CTO Credit
@@ -184,13 +188,16 @@ export const CtoLeaveDashboard: React.FC<CtoLeaveDashboardProps> = ({
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-        <div className="flex items-center gap-1.5 bg-[#F7F8F5] p-1 rounded-xl border border-[#D3D8C8]">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-3">
+        <div className="flex flex-wrap items-center gap-1.5 bg-[#F7F8F5] p-1 rounded-xl border border-[#D3D8C8]">
           {['ALL', 'PENDING', 'APPROVED', 'REJECTED'].map((st) => (
             <button
               key={st}
-              onClick={() => setFilterStatus(st)}
-              className={`px-3 py-1 rounded-lg text-xs font-extrabold transition-all ${
+              onClick={() => {
+                setFilterStatus(st);
+                setCurrentPage(1);
+              }}
+              className={`px-3 py-1 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
                 filterStatus === st
                   ? 'bg-[#656D4A] text-white shadow-2xs'
                   : 'text-gray-600 hover:text-gray-900'
@@ -206,106 +213,178 @@ export const CtoLeaveDashboard: React.FC<CtoLeaveDashboardProps> = ({
         </span>
       </div>
 
-      {/* CTO Requests Table */}
-      <div className="overflow-x-auto rounded-xl border border-[#D3D8C8]">
-        <table className="w-full text-left border-collapse min-w-[700px]">
-          <thead>
-            <tr className="bg-[#656D4A] text-white text-[11px] font-bold uppercase tracking-wider">
-              <th className="p-2.5">Date Requested</th>
-              <th className="p-2.5">Request Type</th>
-              <th className="p-2.5 text-center">Hours</th>
-              <th className="p-2.5">Reason / Purpose</th>
-              <th className="p-2.5">Submitted On</th>
-              <th className="p-2.5 text-center">Status</th>
-              <th className="p-2.5">Approver Notes</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 text-xs">
-            {filteredRequests.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="p-8 text-center text-gray-500 font-bold">
+      {/* CTO Requests Mobile Cards + Desktop Table */}
+      {(() => {
+        const totalPages = Math.max(1, Math.ceil(filteredRequests.length / pageSize));
+        const safePage = Math.min(currentPage, totalPages);
+        const pageRows = filteredRequests.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+        return (
+          <div className="rounded-xl border border-[#D3D8C8] overflow-hidden">
+            {/* Mobile Cards View */}
+            <div className="md:hidden divide-y divide-gray-200 bg-white">
+              {pageRows.length === 0 ? (
+                <div className="p-8 text-center text-gray-500 font-bold text-xs">
                   No CTO leave or credit requests found.
-                </td>
-              </tr>
-            ) : (
-              filteredRequests
-                .slice((currentPage - 1) * pageSize, currentPage * pageSize)
-                .map((req) => (
-                <tr key={req.id} className="hover:bg-[#F9FAF6]">
-                  <td className="p-2.5 font-extrabold text-[#2C3524]">{req.date}</td>
-                  <td className="p-2.5">
-                    {req.requestType === 'CREDIT' ? (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
-                        + CTO Credit Request
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
-                        - CTO Leave Request
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-2.5 text-center font-mono font-bold text-sm">
-                    {req.hoursRequested.toFixed(1)}h
-                  </td>
-                  <td className="p-2.5 text-gray-700 max-w-[200px] truncate" title={req.reason}>
-                    {req.reason}
-                  </td>
-                  <td className="p-2.5 text-gray-500 font-mono text-[11px]">{formatRealtimeTimestamp(req.submittedAt)}</td>
-                  <td className="p-2.5 text-center">
-                    {req.status === 'PENDING' && (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
-                        <Clock3 className="w-3 h-3" /> PENDING
-                      </span>
-                    )}
-                    {req.status === 'APPROVED' && (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" /> APPROVED
-                      </span>
-                    )}
-                    {req.status === 'REJECTED' && (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-900 border border-rose-300">
-                        <AlertCircle className="w-3 h-3 text-rose-600" /> REJECTED
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-2.5 text-xs text-gray-700">
-                    {req.status === 'REJECTED' ? (
-                      <div className="space-y-0.5">
-                        <span className="font-bold text-rose-700 block">
-                          Rejected by: <strong className="text-rose-950">{req.reviewedBy || 'Branch Manager'}</strong>
-                        </span>
-                        {req.reviewNotes && (
-                          <span className="text-[11px] text-zinc-600 block italic">
-                            "{req.reviewNotes}"
+                </div>
+              ) : (
+                pageRows.map((req) => (
+                  <div key={req.id} className="p-3.5 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {req.requestType === 'CREDIT' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
+                            + CTO Credit
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                            - CTO Leave
                           </span>
                         )}
-                        {req.reviewedAt && (
-                          <span className="text-[10px] text-zinc-400 font-mono block">
-                            {formatRealtimeTimestamp(req.reviewedAt)}
+                        <span className="font-extrabold text-xs text-[#2C3524]">{req.date}</span>
+                        <span className="font-mono font-black text-xs text-zinc-900 bg-zinc-100 px-2 py-0.5 rounded">
+                          {req.hoursRequested.toFixed(1)}h
+                        </span>
+                      </div>
+                      <div className="shrink-0">
+                        {req.status === 'PENDING' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                            <Clock3 className="w-3 h-3" /> PENDING
+                          </span>
+                        )}
+                        {req.status === 'APPROVED' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> APPROVED
+                          </span>
+                        )}
+                        {req.status === 'REJECTED' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-900 border border-rose-300">
+                            <AlertCircle className="w-3 h-3 text-rose-600" /> REJECTED
                           </span>
                         )}
                       </div>
-                    ) : (
+                    </div>
+
+                    <p className="text-xs text-gray-700 bg-zinc-50 p-2 rounded-lg border border-zinc-100">
+                      {req.reason}
+                    </p>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-500">
+                      <span className="font-mono">{formatRealtimeTimestamp(req.submittedAt)}</span>
                       <span className="italic text-gray-600">
                         {req.reviewNotes || (req.reviewedBy ? `Reviewed by ${req.reviewedBy}` : '—')}
                       </span>
-                    )}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-        <TablePagination
-          currentPage={currentPage}
-          totalPages={Math.ceil(filteredRequests.length / pageSize)}
-          pageSize={pageSize}
-          totalItems={filteredRequests.length}
-          onPageChange={setCurrentPage}
-          onPageSizeChange={setPageSize}
-          pageSizeOptions={[5, 10, 20, 50]}
-        />
-      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[700px]">
+                <thead>
+                  <tr className="bg-[#656D4A] text-white text-[11px] font-bold uppercase tracking-wider">
+                    <th className="p-2.5">Date Requested</th>
+                    <th className="p-2.5">Request Type</th>
+                    <th className="p-2.5 text-center">Hours</th>
+                    <th className="p-2.5">Reason / Purpose</th>
+                    <th className="p-2.5">Submitted On</th>
+                    <th className="p-2.5 text-center">Status</th>
+                    <th className="p-2.5">Approver Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 text-xs">
+                  {pageRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-gray-500 font-bold">
+                        No CTO leave or credit requests found.
+                      </td>
+                    </tr>
+                  ) : (
+                    pageRows.map((req) => (
+                      <tr key={req.id} className="hover:bg-[#F9FAF6]">
+                        <td className="p-2.5 font-extrabold text-[#2C3524]">{req.date}</td>
+                        <td className="p-2.5">
+                          {req.requestType === 'CREDIT' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
+                              + CTO Credit Request
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                              - CTO Leave Request
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-2.5 text-center font-mono font-bold text-sm">
+                          {req.hoursRequested.toFixed(1)}h
+                        </td>
+                        <td className="p-2.5 text-gray-700 max-w-[200px] truncate" title={req.reason}>
+                          {req.reason}
+                        </td>
+                        <td className="p-2.5 text-gray-500 font-mono text-[11px]">{formatRealtimeTimestamp(req.submittedAt)}</td>
+                        <td className="p-2.5 text-center">
+                          {req.status === 'PENDING' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300">
+                              <Clock3 className="w-3 h-3" /> PENDING
+                            </span>
+                          )}
+                          {req.status === 'APPROVED' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> APPROVED
+                            </span>
+                          )}
+                          {req.status === 'REJECTED' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-900 border border-rose-300">
+                              <AlertCircle className="w-3 h-3 text-rose-600" /> REJECTED
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-2.5 text-xs text-gray-700">
+                          {req.status === 'REJECTED' ? (
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-rose-700 block">
+                                Rejected by: <strong className="text-rose-950">{req.reviewedBy || 'Branch Manager'}</strong>
+                              </span>
+                              {req.reviewNotes && (
+                                <span className="text-[11px] text-zinc-600 block italic">
+                                  "{req.reviewNotes}"
+                                </span>
+                              )}
+                              {req.reviewedAt && (
+                                <span className="text-[10px] text-zinc-400 font-mono block">
+                                  {formatRealtimeTimestamp(req.reviewedAt)}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="italic text-gray-600">
+                              {req.reviewNotes || (req.reviewedBy ? `Reviewed by ${req.reviewedBy}` : '—')}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <TablePagination
+              currentPage={safePage}
+              totalPages={Math.ceil(filteredRequests.length / pageSize)}
+              pageSize={pageSize}
+              totalItems={filteredRequests.length}
+              onPageChange={setCurrentPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setCurrentPage(1);
+              }}
+              pageSizeOptions={[5, 10, 20, 50]}
+            />
+          </div>
+        );
+      })()}
 
       {/* Modal for Filing CTO Leave / Credit Request */}
       {showModal && (

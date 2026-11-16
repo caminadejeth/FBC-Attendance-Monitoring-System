@@ -294,3 +294,22 @@ export const showRemarkPromptAlert = (
     },
   });
 };
+
+export const showAdminAlertToast = (
+  title: string,
+  text: string,
+  severity: 'critical' | 'warning' | 'info' = 'warning'
+) => {
+  return yellowCabSwal.fire({
+    icon: severity === 'critical' ? 'warning' : severity === 'warning' ? 'info' : 'info',
+    iconColor: severity === 'critical' ? '#dc2626' : '#d97706',
+    title,
+    text,
+    toast: true,
+    position: 'top-end',
+    showConfirmButton: false,
+    timer: 4500,
+    timerProgressBar: true,
+  });
+};
+

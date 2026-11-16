@@ -140,6 +140,122 @@
         "timestamp": { "type": "string" }
       },
       "required": ["id", "employeeId", "amount"]
+    },
+    "warehouseCategories": {
+      "title": "WarehouseCategory",
+      "description": "Warehouse inventory stock categories",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "sortOrder": { "type": "number" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["id", "name", "updatedAt"]
+    },
+    "warehouseItems": {
+      "title": "WarehouseInventoryItem",
+      "description": "Branch-level warehouse inventory stock balances",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "itemCode": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "batchNo": { "type": "string" },
+        "uom": { "type": "string" },
+        "unitPrice": { "type": "number" },
+        "branchCode": { "type": "string" },
+        "branchName": { "type": "string" },
+        "quantity": { "type": "number" },
+        "reorderLevel": { "type": "number" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["id", "description", "category", "uom", "branchCode", "quantity"]
+    },
+    "stockMovements": {
+      "title": "StockMovementEntry",
+      "description": "Stock movement ledger for Stock In, Stock Out, Transfer In, and Transfer Out",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "movementType": { "type": "string" },
+        "status": { "type": "string" },
+        "branchCode": { "type": "string" },
+        "branchName": { "type": "string" },
+        "counterpartyBranchCode": { "type": "string" },
+        "counterpartyBranchName": { "type": "string" },
+        "fromBranchCode": { "type": "string" },
+        "fromBranchName": { "type": "string" },
+        "toBranchCode": { "type": "string" },
+        "toBranchName": { "type": "string" },
+        "itemId": { "type": "string" },
+        "itemCode": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "batchNo": { "type": "string" },
+        "uom": { "type": "string" },
+        "unitPrice": { "type": "number" },
+        "quantity": { "type": "number" },
+        "previousQty": { "type": "number" },
+        "newQty": { "type": "number" },
+        "refNumber": { "type": "string" },
+        "transferNumber": { "type": "string" },
+        "performedBy": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "date", "movementType", "branchCode", "description", "quantity", "refNumber"]
+    },
+    "stockTransfers": {
+      "title": "StockTransferRequisition",
+      "description": "Stock Transfer Requisition (STR) records across FBC branches",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "transferNumber": { "type": "string" },
+        "strRefNumber": { "type": "string" },
+        "date": { "type": "string" },
+        "fromBranchCode": { "type": "string" },
+        "fromBranchName": { "type": "string" },
+        "toBranchCode": { "type": "string" },
+        "toBranchName": { "type": "string" },
+        "items": { "type": "array" },
+        "preparedBy": { "type": "string" },
+        "reviewedBy": { "type": "string" },
+        "reviewedAt": { "type": "string" },
+        "reviewedByUserId": { "type": "string" },
+        "receivedBy": { "type": "string" },
+        "receivedAt": { "type": "string" },
+        "receivedByUserId": { "type": "string" },
+        "receivedByRole": { "type": "string" },
+        "remarks": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "createdByUserId": { "type": "string" }
+      },
+      "required": ["id", "transferNumber", "strRefNumber", "date", "fromBranchCode", "toBranchCode", "items", "preparedBy", "status"]
+    }
+  },
+  "firestore": {
+    "/warehouseCategories/{categoryId}": {
+      "schema": { "$ref": "#/entities/warehouseCategories" },
+      "description": "Warehouse inventory categories"
+    },
+    "/warehouseItems/{itemId}": {
+      "schema": { "$ref": "#/entities/warehouseItems" },
+      "description": "Warehouse inventory stock items per branch"
+    },
+    "/stockMovements/{movementId}": {
+      "schema": { "$ref": "#/entities/stockMovements" },
+      "description": "Stock movement ledger entries"
+    },
+    "/stockTransfers/{transferId}": {
+      "schema": { "$ref": "#/entities/stockTransfers" },
+      "description": "Stock Transfer Requisition (STR) documents"
     }
   }
 }

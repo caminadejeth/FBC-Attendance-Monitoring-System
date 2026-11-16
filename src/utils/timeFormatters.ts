@@ -4,6 +4,85 @@ import { AttendanceSummaryDaily, AttendanceStatus, User, BiometricPunch } from '
  * Utility functions for time and date formatting in Attendance & Punch History.
  */
 
+const PLACEHOLDER_BRANCHES = new Set([
+  '',
+  'no fixed branch (assigned per shift)',
+  'store operations',
+  'main branch',
+]);
+
+export function isPlaceholderBranch(val?: string | null): boolean {
+  if (!val) return true;
+  return PLACEHOLDER_BRANCHES.has(val.trim().toLowerCase());
+}
+
+export function findUserForEmployeeId(employeeId: string, usersList: User[] = []): User | undefined {
+  if (!employeeId || usersList.length === 0) return undefined;
+  const upper = employeeId.trim().toUpperCase();
+  const exact = usersList.find((u) => u.employeeId.trim().toUpperCase() === upper);
+  if (exact) return exact;
+  const numOnly = upper.replace(/\D/g, '');
+  if (!numOnly) return undefined;
+  return usersList.find((u) => u.employeeId.replace(/\D/g, '') === numOnly);
+}
+
+/**
+ * Resolves the branch to display for an attendance summary row.
+ * - For STAFF and SHIFT_MANAGER (no fixed branch), prioritizes the branch of the
+ *   BRANCH_MANAGER who uploaded the log (via uploadedByUserId), then a valid summary.branch.
+ * - For fixed-branch roles (BRANCH_MANAGER, PAYROLL, ADMIN), displays the user's department.
+ */
+export function resolveSummaryBranch(
+  summary: AttendanceSummaryDaily,
+  usersList: User[] = [],
+  targetUser?: User
+): string {
+  const empUser = targetUser || findUserForEmployeeId(summary.employeeId, usersList);
+  const uploader = summary.uploadedByUserId
+    ? usersList.find((u) => u.id === summary.uploadedByUserId)
+    : undefined;
+
+  const uploaderBranch =
+    uploader && !isPlaceholderBranch(uploader.branch)
+      ? uploader.branch!.trim()
+      : uploader && !isPlaceholderBranch(uploader.department)
+      ? uploader.department.trim()
+      : undefined;
+
+  const isShiftBased = empUser
+    ? empUser.role === 'STAFF' ||
+      empUser.role === 'SHIFT_MANAGER' ||
+      isPlaceholderBranch(empUser.department)
+    : isPlaceholderBranch(summary.department);
+
+  if (isShiftBased) {
+    if (uploader?.role === 'BRANCH_MANAGER' && uploaderBranch) {
+      return uploaderBranch;
+    }
+    if (!isPlaceholderBranch(summary.branch)) {
+      return summary.branch!.trim();
+    }
+    if (uploaderBranch) {
+      return uploaderBranch;
+    }
+    if (!isPlaceholderBranch(summary.department)) {
+      return summary.department.trim();
+    }
+    if (empUser && !isPlaceholderBranch(empUser.branch)) {
+      return empUser.branch!.trim();
+    }
+    return summary.branch || summary.department || 'Main Branch';
+  }
+
+  return (
+    empUser?.department ||
+    empUser?.branch ||
+    summary.department ||
+    summary.branch ||
+    'Main Branch'
+  );
+}
+
 export function formatRealtimeTimestamp(isoStr?: string | null): string {
   if (!isoStr) {
     return formatLocalDate(new Date());

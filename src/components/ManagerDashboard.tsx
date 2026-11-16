@@ -21,7 +21,7 @@ import {
   parseAndCleanBiometricExcel,
   generateSampleBiometricExcel,
 } from '../utils/fileProcessor';
-import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, formatRealtimeTimestamp } from '../utils/timeFormatters';
+import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, formatRealtimeTimestamp, findUserForEmployeeId, isPlaceholderBranch, resolveSummaryBranch } from '../utils/timeFormatters';
 import { isFieldAdjusted, getAdjustedDisplayTime } from '../utils/adjustmentHelper';
 import { exportDisputesToPdf } from '../utils/pdfExportHelper';
 import {
@@ -112,7 +112,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   activeTab,
 }) => {
   // Navigation sub-tab inside Manager Dashboard
-  const [managerTab, setManagerTab] = useState<'PERSONAL' | 'ZKTECO_UPLOAD' | 'ZKTECO_DAT' | 'BRANCH_LOGS' | 'SCHEDULES' | 'DISPUTES' | 'MY_CTO'>('BRANCH_LOGS');
+  const [managerTab, setManagerTab] = useState<'PERSONAL' | 'ZKTECO_UPLOAD' | 'ZKTECO_DAT' | 'BRANCH_LOGS' | 'DTR_LOGS' | 'SCHEDULES' | 'DISPUTES' | 'MY_CTO'>('BRANCH_LOGS');
 
   // Sync activeTab prop from sidebar navigation
   React.useEffect(() => {
@@ -120,7 +120,9 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       setManagerTab('ZKTECO_DAT');
     } else if (activeTab === 'upload' || activeTab === 'zkteco-upload') {
       setManagerTab('ZKTECO_UPLOAD');
-    } else if (activeTab === 'branch-logs' || activeTab === 'logs' || activeTab === 'overview' || activeTab === 'dtr-logs') {
+    } else if (activeTab === 'dtr-logs') {
+      setManagerTab('DTR_LOGS');
+    } else if (activeTab === 'branch-logs' || activeTab === 'logs' || activeTab === 'overview') {
       setManagerTab('BRANCH_LOGS');
     } else if (activeTab === 'disputes' || activeTab === 'time-adjustments') {
       setManagerTab('DISPUTES');
@@ -149,8 +151,9 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   const [endDate, setEndDate] = useState<string>('');
   const [activePreset, setActivePreset] = useState<string>('ALL');
 
-  // Time Adjustment Request Modal State
+  // Time Adjustment Request Modal & Filter State
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
+  const [disputeFilter, setDisputeFilter] = useState<'PENDING' | 'HISTORY' | 'ALL'>('PENDING');
 
   // Preset Date Range Helper
   const handlePresetChange = (preset: string) => {
@@ -217,8 +220,16 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     .filter((s) => {
       // Role isolation: BRANCH_MANAGER can only see data they uploaded or matching their branch
       if (currentUser.role === 'BRANCH_MANAGER') {
+        const myBranch =
+          (!isPlaceholderBranch(currentUser.branch) ? currentUser.branch : undefined) ||
+          (!isPlaceholderBranch(currentUser.department) ? currentUser.department : undefined) ||
+          currentUser.department;
+        const resolvedBranch = resolveSummaryBranch(s, users);
         const isUploadedByMe = s.uploadedByUserId ? s.uploadedByUserId === currentUser.id : true;
-        const isMyBranch = s.branch ? s.branch === currentUser.department : true;
+        const isMyBranch =
+          s.branch || resolvedBranch
+            ? resolvedBranch === myBranch || s.branch === myBranch
+            : true;
         if (!isUploadedByMe && !isMyBranch) return false;
       }
 
@@ -257,11 +268,29 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     setIsProcessing(false);
 
     if (result.isValid) {
-      const taggedSummaries = result.summaries.map((s) => ({
-        ...s,
-        uploadedByUserId: currentUser.id,
-        branch: s.branch || currentUser.department || 'Main Branch',
-      }));
+      const uploaderBranch =
+        (!isPlaceholderBranch(currentUser.branch) ? currentUser.branch : undefined) ||
+        (!isPlaceholderBranch(currentUser.department) ? currentUser.department : undefined) ||
+        'Main Branch';
+
+      const taggedSummaries = result.summaries.map((s) => {
+        const matchedUser = findUserForEmployeeId(s.employeeId, users);
+        const isShiftBased =
+          !matchedUser ||
+          matchedUser.role === 'STAFF' ||
+          matchedUser.role === 'SHIFT_MANAGER' ||
+          isPlaceholderBranch(matchedUser.department);
+
+        return {
+          ...s,
+          uploadedByUserId: currentUser.id,
+          branch: isShiftBased
+            ? uploaderBranch
+            : !isPlaceholderBranch(s.branch)
+            ? s.branch
+            : uploaderBranch,
+        };
+      });
       onUploadProcessed(taggedSummaries);
       setUploadMessage({
         type: 'success',
@@ -322,9 +351,10 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
   // Export Branch Attendance Summary
   const handleExportBranchSummary = () => {
-    const exportData = summaries.map((s) => ({
+    const exportData = branchSummaries.map((s) => ({
       'Employee ID': s.employeeId,
       'Employee Name': s.employeeName,
+      'Branch': resolveSummaryBranch(s, users),
       'Department': s.department,
       'Date': s.date,
       'Weekday': s.weekday,
@@ -410,7 +440,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   return (
     <div className="space-y-6">
       {/* MANAGER IDENTITY & ROLE HEADER CARD - Shown strictly on Main Branch Logs tab */}
-      {(managerTab === 'BRANCH_LOGS' || activeTab === 'branch-logs' || activeTab === 'overview' || activeTab === 'dashboard') && (
+      {managerTab === 'BRANCH_LOGS' && (
         <div className="bg-white rounded-2xl border-2 border-zinc-950 p-6 shadow-md">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
@@ -486,7 +516,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
 
       {/* TAB: EMPLOYEE DTR LOGS SHEET TEMPLATE */}
-      {currentUser.role !== 'SHIFT_MANAGER' && (activeTab === 'dtr-logs' || managerTab === 'DTR_LOGS' || activeTab === 'all') && (
+      {currentUser.role !== 'SHIFT_MANAGER' && (managerTab === 'DTR_LOGS' || activeTab === 'all') && (
         <EmployeeDtrSheet
           users={users}
           summaries={summaries}
@@ -526,130 +556,246 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
               </p>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
                 id="btn-export-pdf-disputes-manager"
-                onClick={() => exportDisputesToPdf(disputes, currentUser.department || 'ALL')}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-amber-400 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer"
+                onClick={() => {
+                  const branchName = currentUser.branch || currentUser.department || 'Branch';
+                  const pendingItems = disputes.filter((d) => d.status === 'PENDING');
+                  const historyItems = disputes.filter((d) => d.status !== 'PENDING');
+                  const activeList =
+                    disputeFilter === 'PENDING'
+                      ? pendingItems
+                      : disputeFilter === 'HISTORY'
+                      ? historyItems
+                      : disputes;
+                  const itemsToExport = activeList.length > 0 ? activeList : disputes;
+                  exportDisputesToPdf(itemsToExport, branchName);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-amber-400 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer transition-colors whitespace-nowrap"
               >
                 <FileText className="w-4 h-4 text-amber-400" /> Export PDF (4/Page)
               </button>
               <button
                 id="btn-manager-new-adjustment"
                 onClick={() => setShowAdjustmentModal(true)}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer whitespace-nowrap"
               >
                 <PlusCircle className="w-4 h-4" /> New Time Adjustment Form
               </button>
             </div>
           </div>
 
-          <div className="space-y-3">
-            {disputes.length === 0 ? (
-              <div className="p-10 text-center bg-zinc-50 rounded-2xl border border-dashed border-zinc-300 space-y-2">
-                <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto" />
-                <p className="text-sm font-bold text-zinc-700">No Time Adjustment Requests Found</p>
-                <p className="text-xs text-zinc-500">
-                  There are currently no time adjustment or dispute tickets waiting for review.
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-4">
-                {disputes.map((d) => (
-                  <div
-                    key={d.id}
-                    className={`p-4 rounded-xl border-2 transition-all ${
-                      d.status === 'PENDING'
-                        ? 'border-amber-400 bg-amber-50/40'
-                        : d.status === 'APPROVED'
-                        ? 'border-emerald-300 bg-emerald-50/30'
-                        : 'border-rose-200 bg-rose-50/30'
-                    }`}
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-sm text-zinc-950">
-                            {d.employeeName}
-                          </span>
-                          <span className="font-mono text-xs font-bold text-amber-900">
-                            ({d.employeeId})
-                          </span>
-                          <span
-                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
-                              d.status === 'PENDING'
-                                ? 'bg-amber-400 text-zinc-950'
-                                : d.status === 'APPROVED'
-                                ? 'bg-emerald-600 text-white'
-                                : 'bg-rose-600 text-white'
-                            }`}
-                          >
-                            {d.status}
-                          </span>
-                        </div>
+          {/* Filter Tabs & Sub-header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-50 p-3 rounded-xl border border-zinc-200">
+            <div className="flex flex-wrap items-center gap-1.5 p-1 bg-white rounded-lg border border-zinc-200 text-xs font-bold shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setDisputeFilter('PENDING')}
+                className={`px-3.5 py-1.5 rounded-md transition-all cursor-pointer ${
+                  disputeFilter === 'PENDING'
+                    ? 'bg-amber-400 text-zinc-950 font-black shadow-2xs'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                Pending Requests ({disputes.filter((d) => d.status === 'PENDING').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setDisputeFilter('HISTORY')}
+                className={`px-3.5 py-1.5 rounded-md transition-all cursor-pointer ${
+                  disputeFilter === 'HISTORY'
+                    ? 'bg-emerald-600 text-white font-black shadow-2xs'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                Adjustment History ({disputes.filter((d) => d.status !== 'PENDING').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setDisputeFilter('ALL')}
+                className={`px-3.5 py-1.5 rounded-md transition-all cursor-pointer ${
+                  disputeFilter === 'ALL'
+                    ? 'bg-zinc-900 text-white font-black shadow-2xs'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                All ({disputes.length})
+              </button>
+            </div>
 
-                        <div className="text-xs text-zinc-600">
-                          <span className="font-bold text-zinc-800">
-                            Target Date: {formatDateMDYYYY(d.date)}
-                          </span>
-                        </div>
+            <div className="text-xs font-medium text-zinc-500">
+              {disputeFilter === 'PENDING' && 'Showing active requests awaiting review & sign-off'}
+              {disputeFilter === 'HISTORY' && 'Showing approved & processed time adjustment history'}
+              {disputeFilter === 'ALL' && 'Showing all pending requests and historical adjustment records'}
+            </div>
+          </div>
 
-                        <DisputeCardDetails dispute={d} />
+          <div className="space-y-4">
+            {(() => {
+              const pendingItems = disputes.filter((d) => d.status === 'PENDING');
+              const historyItems = disputes.filter((d) => d.status !== 'PENDING');
+              const displayList =
+                disputeFilter === 'PENDING'
+                  ? pendingItems
+                  : disputeFilter === 'HISTORY'
+                  ? historyItems
+                  : disputes;
+
+              if (displayList.length === 0) {
+                return (
+                  <div className="p-10 text-center bg-zinc-50 rounded-2xl border border-dashed border-zinc-300 space-y-2">
+                    <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto" />
+                    <p className="text-sm font-bold text-zinc-700">
+                      {disputeFilter === 'PENDING'
+                        ? 'No Pending Time Adjustment Requests'
+                        : disputeFilter === 'HISTORY'
+                        ? 'No Time Adjustment History Records'
+                        : 'No Time Adjustment Requests Found'}
+                    </p>
+                    <p className="text-xs text-zinc-500">
+                      {disputeFilter === 'PENDING'
+                        ? 'There are currently no tickets waiting for review. Switch to "Adjustment History" to view approved or processed forms.'
+                        : 'No historical adjustment forms match the selected view filter.'}
+                    </p>
+                  </div>
+                );
+              }
+
+              const renderDisputeCard = (d: DisputeRequest) => (
+                <div
+                  key={d.id}
+                  className={`p-4 rounded-xl border-2 transition-all ${
+                    d.status === 'PENDING'
+                      ? 'border-amber-400 bg-amber-50/40'
+                      : d.status === 'APPROVED'
+                      ? 'border-emerald-300 bg-emerald-50/30'
+                      : 'border-rose-200 bg-rose-50/30'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-extrabold text-sm text-zinc-950">
+                          {d.employeeName}
+                        </span>
+                        <span className="font-mono text-xs font-bold text-amber-900">
+                          ({d.employeeId})
+                        </span>
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                            d.status === 'PENDING'
+                              ? 'bg-amber-400 text-zinc-950'
+                              : d.status === 'APPROVED'
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-rose-600 text-white'
+                          }`}
+                        >
+                          {d.status === 'APPROVED' ? 'APPROVED (HISTORY)' : d.status === 'REJECTED' ? 'REJECTED (HISTORY)' : d.status}
+                        </span>
                       </div>
 
-                      {d.status === 'PENDING' && onApproveDispute && onRejectDispute && (
-                        <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0">
-                          {d.managerApproved ? (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold shadow-2xs">
-                              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                              Manager Signed Off (Awaiting Payroll)
-                            </span>
-                          ) : (
-                            <>
-                              <button
-                                onClick={async () => {
-                                  const noteRes = await showRemarkPromptAlert(
-                                    d.employeeName,
-                                    formatDateMDYYYY(d.date),
-                                    d.reason
-                                  );
-                                  const reviewNotes = noteRes.isConfirmed ? noteRes.value : d.reason;
-                                  onApproveDispute(d.id, reviewNotes, 'MANAGER');
-                                  showSuccessAlert(
-                                    'Branch Manager Approval Recorded!',
-                                    `Approved adjustment for ${d.employeeName} on ${formatDateMDYYYY(d.date)}. Request forwarded to Payroll Department for final sign-off.`
-                                  );
-                                }}
-                                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-2xs cursor-pointer"
-                              >
-                                <Check className="w-4 h-4" /> Approve (Branch Manager)
-                              </button>
+                      <div className="text-xs text-zinc-600">
+                        <span className="font-bold text-zinc-800">
+                          Target Date: {formatDateMDYYYY(d.date)}
+                        </span>
+                      </div>
 
-                              <button
-                                onClick={async () => {
-                                  const noteRes = await showRemarkPromptAlert(
-                                    d.employeeName,
-                                    formatDateMDYYYY(d.date),
-                                    'Reason for rejection'
-                                  );
-                                  const reviewNotes = noteRes.isConfirmed
-                                    ? noteRes.value
-                                    : 'Request rejected by Branch Manager';
-                                  onRejectDispute(d.id, reviewNotes);
-                                }}
-                                className="px-3 py-2 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-800 text-xs font-bold flex items-center gap-1 cursor-pointer"
-                              >
-                                <X className="w-4 h-4" /> Reject
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      )}
+                      <DisputeCardDetails dispute={d} />
                     </div>
+
+                    {d.status === 'PENDING' && onApproveDispute && onRejectDispute && (
+                      <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0">
+                        {d.managerApproved ? (
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-bold shadow-2xs">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                            Manager Signed Off (Awaiting Payroll)
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              onClick={async () => {
+                                const noteRes = await showRemarkPromptAlert(
+                                  d.employeeName,
+                                  formatDateMDYYYY(d.date),
+                                  d.reason
+                                );
+                                const reviewNotes = noteRes.isConfirmed ? noteRes.value : d.reason;
+                                onApproveDispute(d.id, reviewNotes, 'MANAGER');
+                                showSuccessAlert(
+                                  'Branch Manager Approval Recorded!',
+                                  `Approved adjustment for ${d.employeeName} on ${formatDateMDYYYY(d.date)}. Request forwarded to Payroll Department for final sign-off.`
+                                );
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                            >
+                              <Check className="w-4 h-4" /> Approve (Branch Manager)
+                            </button>
+
+                            <button
+                              onClick={async () => {
+                                const noteRes = await showRemarkPromptAlert(
+                                  d.employeeName,
+                                  formatDateMDYYYY(d.date),
+                                  'Reason for rejection'
+                                );
+                                const reviewNotes = noteRes.isConfirmed
+                                  ? noteRes.value
+                                  : 'Request rejected by Branch Manager';
+                                onRejectDispute(d.id, reviewNotes);
+                              }}
+                              className="px-3 py-2 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-800 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <X className="w-4 h-4" /> Reject
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
-                ))}
-              </div>
-            )}
+                </div>
+              );
+
+              if (disputeFilter === 'ALL') {
+                return (
+                  <div className="space-y-6">
+                    {pendingItems.length > 0 && (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 border-b border-amber-200 pb-2">
+                          <Clock className="w-4 h-4 text-amber-600" />
+                          <h4 className="text-xs font-black uppercase text-amber-950 tracking-wider">
+                            Pending Requests ({pendingItems.length})
+                          </h4>
+                        </div>
+                        <div className="grid grid-cols-1 gap-4">
+                          {pendingItems.map(renderDisputeCard)}
+                        </div>
+                      </div>
+                    )}
+
+                    {historyItems.length > 0 && (
+                      <div className="space-y-3 pt-2">
+                        <div className="flex items-center gap-2 border-b border-emerald-200 pb-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                          <h4 className="text-xs font-black uppercase text-emerald-950 tracking-wider">
+                            Time Adjustment History (Approved & Processed) ({historyItems.length})
+                          </h4>
+                        </div>
+                        <div className="grid grid-cols-1 gap-4">
+                          {historyItems.map(renderDisputeCard)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              return (
+                <div className="grid grid-cols-1 gap-4">
+                  {displayList.map(renderDisputeCard)}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -790,18 +936,18 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 id="btn-manager-request-time-adjustment"
                 onClick={() => setShowAdjustmentModal(true)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer shrink-0"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer shrink-0 whitespace-nowrap"
               >
                 <PlusCircle className="w-4 h-4" /> Request Time Adjustment
               </button>
 
               <button
                 onClick={handleExportBranchSummary}
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-[#D3D8C8] bg-[#F7F8F5] hover:bg-[#E6E8DE] text-xs font-bold text-[#2C3524] transition-colors cursor-pointer"
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-[#D3D8C8] bg-[#F7F8F5] hover:bg-[#E6E8DE] text-xs font-bold text-[#2C3524] transition-colors cursor-pointer whitespace-nowrap"
               >
                 <FileSpreadsheet className="w-4 h-4 text-[#656D4A]" />
                 Export (.xlsx)
@@ -890,8 +1036,139 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             </div>
           </div>
 
-          {/* Branch Logs Table */}
-          <div className="overflow-x-auto border border-gray-200 rounded-xl">
+          {/* Mobile Branch Logs Cards */}
+          <div className="md:hidden space-y-2.5">
+            {branchSummaries.length === 0 ? (
+              <div className="p-6 text-center text-xs text-gray-400 border border-dashed border-gray-200 rounded-xl bg-gray-50/50">
+                No branch employee attendance records matching filters.
+              </div>
+            ) : (
+              branchSummaries.map((s) => {
+                const isAbsent = s.status === 'ABSENT';
+                const hasClockIn = Boolean(s.firstIn && s.firstIn !== 'No Data' && s.firstIn !== '--');
+                const hasClockOut = Boolean(s.lastOut && s.lastOut !== 'No Data' && s.lastOut !== '--');
+                const hasBreakOut = Boolean(s.breakOut && s.breakOut !== 'No Data' && s.breakOut !== '--');
+                const hasBreakIn = Boolean(s.breakIn && s.breakIn !== 'No Data' && s.breakIn !== '--');
+
+                const missingPunches: string[] = [];
+                if (!isAbsent) {
+                  if (!hasClockIn) missingPunches.push('Clock-In');
+                  if (!hasBreakOut) missingPunches.push('Break-Out');
+                  if (!hasBreakIn) missingPunches.push('Break-In');
+                  if (!hasClockOut) missingPunches.push('Clock-Out');
+                }
+
+                const clockInVal = getAdjustedDisplayTime(s, 'firstIn', disputes) || s.firstIn;
+                const breakOutVal = getAdjustedDisplayTime(s, 'breakOut', disputes) || s.breakOut;
+                const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
+                const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
+
+                return (
+                  <div key={`mob-br-${s.id}`} className="rounded-xl border border-gray-200 bg-white p-3.5 space-y-2.5 shadow-2xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-sm text-[#2C3524] truncate">{s.employeeName}</div>
+                        <div className="text-[11px] font-mono text-[#656D4A] font-bold">
+                          {s.employeeId} · {resolveSummaryBranch(s, users)}
+                        </div>
+                        <div className="text-[11px] font-bold text-[#2C3524] mt-0.5">
+                          {formatDateWithDay(s.date, s.weekday)}
+                        </div>
+                      </div>
+                      <div className="shrink-0">
+                        {isAbsent ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300 whitespace-nowrap">
+                            ✕ Absent
+                          </span>
+                        ) : missingPunches.length > 0 ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-950 border border-amber-400">
+                            ⚡ Missing {missingPunches.length}
+                          </span>
+                        ) : s.status === 'COMPLETE' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 whitespace-nowrap">
+                            ✓ Complete
+                          </span>
+                        ) : s.status === 'UNDERTIME' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 whitespace-nowrap">
+                            ⚠ Undertime (-{s.undertimeHours.toFixed(1)}h)
+                          </span>
+                        ) : s.status === 'OVERTIME' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300 whitespace-nowrap">
+                            ★ OT (+{s.overtimeHours.toFixed(1)}h)
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-800 border border-gray-300 whitespace-nowrap">
+                            {s.status}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5 text-[11px] font-mono bg-[#F7F8F5] p-2 rounded-lg border border-[#D3D8C8]/70">
+                      <div>
+                        <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Clock In</span>
+                        {isFieldAdjusted(s, 'firstIn', disputes) ? (
+                          <span className="adjusted-time-blinking">{clockInVal ? formatTime12Hr(clockInVal) : '08:00 AM'} Adj</span>
+                        ) : clockInVal ? formatTime12Hr(clockInVal) : 'No Data'}
+                      </div>
+                      <div>
+                        <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Clock Out</span>
+                        {isFieldAdjusted(s, 'lastOut', disputes) ? (
+                          <span className="adjusted-time-blinking">{clockOutVal ? formatTime12Hr(clockOutVal) : '05:00 PM'} Adj</span>
+                        ) : clockOutVal ? formatTime12Hr(clockOutVal) : 'No Data'}
+                      </div>
+                      <div>
+                        <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Break Out (2)</span>
+                        {isFieldAdjusted(s, 'breakOut', disputes) ? (
+                          <span className="adjusted-time-blinking">{breakOutVal ? formatTime12Hr(breakOutVal) : '12:00 PM'} Adj</span>
+                        ) : breakOutVal ? formatTime12Hr(breakOutVal) : 'No Data'}
+                      </div>
+                      <div>
+                        <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Break In (3)</span>
+                        {isFieldAdjusted(s, 'breakIn', disputes) ? (
+                          <span className="adjusted-time-blinking">{breakInVal ? formatTime12Hr(breakInVal) : '01:00 PM'} Adj</span>
+                        ) : breakInVal ? formatTime12Hr(breakInVal) : 'No Data'}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] pt-1 border-t border-gray-100">
+                      <div className="font-mono text-gray-600">
+                        Break <strong className="text-gray-800">{s.totalBreakMinutes}m</strong> · Net{' '}
+                        <strong className="text-[#2C3524]">{s.netHoursWorked.toFixed(1)} hrs</strong>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await showRemarkPromptAlert(
+                            s.employeeName,
+                            formatDateWithDay(s.date, s.weekday),
+                            s.anomalies.join(' | ')
+                          );
+                          if (res.isConfirmed && res.value !== undefined) {
+                            if (onUpdateSummaryAnomaly) {
+                              onUpdateSummaryAnomaly(s.id, res.value);
+                            }
+                            showActionSuccessToast('Anomalies / Note updated!');
+                          }
+                        }}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-[#D3D8C8] hover:bg-[#E6E8DE] text-[10px] font-bold text-[#656D4A] cursor-pointer whitespace-nowrap"
+                      >
+                        <MessageSquare className="w-3 h-3 text-[#656D4A]" /> Notes
+                      </button>
+                    </div>
+                    {s.anomalies.length > 0 && (
+                      <div className="text-[11px] text-gray-600 bg-gray-50 px-2 py-1 rounded border border-gray-100">
+                        {s.anomalies.join(' | ')}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Branch Logs Table (Desktop) */}
+          <div className="hidden md:block overflow-x-auto border border-gray-200 rounded-xl">
             <table className="w-full text-left text-xs">
               <thead className="bg-[#F7F8F5] text-[#4A543E] font-bold border-b border-gray-200">
                 <tr>
@@ -941,7 +1218,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                       <tr key={s.id} className="hover:bg-gray-50 transition-colors">
                         <td className="p-3 font-mono font-bold text-[#656D4A]">{s.employeeId}</td>
                         <td className="p-3 font-bold text-[#2C3524]">{s.employeeName}</td>
-                        <td className="p-3 text-[11px] font-semibold text-zinc-600">{s.branch || s.department || 'Main Branch'}</td>
+                        <td className="p-3 text-[11px] font-semibold text-zinc-600">{resolveSummaryBranch(s, users)}</td>
                         <td className="p-3 font-bold text-[#2C3524]">{formatDateWithDay(s.date, s.weekday)}</td>
                         <td className="p-3 font-mono text-xs whitespace-nowrap">
                           {isFieldAdjusted(s, 'firstIn', disputes) ? (
@@ -1035,8 +1312,6 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                                 if (res.isConfirmed && res.value !== undefined) {
                                   if (onUpdateSummaryAnomaly) {
                                     onUpdateSummaryAnomaly(s.id, res.value);
-                                  } else {
-                                    s.anomalies = [res.value.trim()];
                                   }
                                   showActionSuccessToast('Anomalies / Note updated!');
                                 }
@@ -1262,7 +1537,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             <h3 className="text-base font-bold text-[#2C3524]">My Dispute & Adjustment Tickets</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {myDisputes.length === 0 ? (
-                <div className="col-span-2 p-8 text-center text-gray-400">
+                <div className="md:col-span-2 p-8 text-center text-gray-400">
                   You have not submitted any dispute tickets.
                 </div>
               ) : (

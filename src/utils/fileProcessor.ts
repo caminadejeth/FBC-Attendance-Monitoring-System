@@ -6,6 +6,7 @@ import {
   RawBiometricRow,
   User,
 } from '../types';
+import { isPlaceholderBranch } from './timeFormatters';
 
 export interface FileValidationResult {
   isValid: boolean;
@@ -161,6 +162,8 @@ function getSecondsDifference(ts1: string, ts2: string): number {
 interface ShiftGroup {
   empId: string;
   name: string;
+  department: string;
+  branch?: string;
   date: string; // YYYY-MM-DD shift start date
   weekday: string;
   punches: BiometricPunch[];
@@ -194,6 +197,24 @@ function groupPunchesIntoShiftBuckets(
   employeePunchesMap.forEach((punches, empId) => {
     punches.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     const empName = resolveEmployeeName(empId, nameLookupMap?.get(empId), usersList);
+    const numOnly = empId.replace(/\D/g, '');
+    const matchedUser =
+      usersList?.find((u) => u.employeeId.toUpperCase() === empId.toUpperCase()) ||
+      (numOnly
+        ? usersList?.find((u) => u.employeeId.replace(/\D/g, '') === numOnly)
+        : undefined);
+    const empDept = matchedUser?.department || 'Store Operations';
+    const isShiftBasedUser =
+      matchedUser?.role === 'STAFF' ||
+      matchedUser?.role === 'SHIFT_MANAGER' ||
+      isPlaceholderBranch(matchedUser?.department);
+    const empBranch = isShiftBasedUser
+      ? undefined
+      : !isPlaceholderBranch(matchedUser?.department)
+      ? matchedUser?.department
+      : !isPlaceholderBranch(matchedUser?.branch)
+      ? matchedUser?.branch
+      : undefined;
 
     let currentGroup: ShiftGroup | null = null;
 
@@ -206,6 +227,8 @@ function groupPunchesIntoShiftBuckets(
         currentGroup = {
           empId,
           name: empName,
+          department: empDept,
+          branch: empBranch,
           date: pDate,
           weekday: getWeekdayStr(pDate),
           punches: [punch],
@@ -233,6 +256,8 @@ function groupPunchesIntoShiftBuckets(
           currentGroup = {
             empId,
             name: empName,
+            department: empDept,
+            branch: empBranch,
             date: pDate,
             weekday: getWeekdayStr(pDate),
             punches: [punch],
@@ -354,7 +379,8 @@ function createDailySummariesFromShiftGroups(shiftGroups: ShiftGroup[]): Attenda
       id: `summary-${group.empId}-${group.date}`,
       employeeId: group.empId,
       employeeName: group.name,
-      department: 'Store Operations',
+      department: group.department,
+      ...(group.branch ? { branch: group.branch } : {}),
       date: group.date,
       weekday: group.weekday,
       firstIn: firstInTime,

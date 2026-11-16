@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { DisputeRequest } from '../types';
-import { Paperclip, ExternalLink, CheckCircle2, XCircle, Clock, UserCheck, ShieldCheck } from 'lucide-react';
+import { Paperclip, ExternalLink, CheckCircle2, XCircle, Clock, UserCheck, X } from 'lucide-react';
 import { formatRealtimeTimestamp } from '../utils/timeFormatters';
 
 interface DisputeCardDetailsProps {
@@ -8,6 +8,7 @@ interface DisputeCardDetailsProps {
 }
 
 export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute }) => {
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const cat = dispute.category || dispute.type || 'Time-in';
 
   let timeDetailText = '';
@@ -44,7 +45,7 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
           <strong className="text-zinc-500 text-[10px] block uppercase font-bold tracking-tight mb-0.5">
             Reason / Explanation:
           </strong>
-          <p className="text-zinc-800 italic bg-zinc-50 p-2 rounded-lg border border-zinc-150">
+          <p className="text-zinc-800 italic bg-zinc-50 p-2 rounded-lg border border-zinc-200">
             "{dispute.reason}"
           </p>
         </div>
@@ -75,16 +76,46 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
                   src={dispute.attachmentUrl}
                   alt="Attachment Proof"
                   className="w-full h-auto max-h-40 object-cover cursor-pointer group-hover:scale-105 transition-transform duration-200"
-                  onClick={() => {
-                    const w = window.open('');
-                    w?.document.write(`<title>Attachment File Proof</title><div style="display:flex;justify-content:center;align-items:center;min-height:100vh;background:#0f172a;"><img src="${dispute.attachmentUrl}" style="max-width:90%; max-height:90vh; border-radius:12px; box-shadow:0 10px 25px rgba(0,0,0,0.5);" /></div>`);
-                  }}
+                  onClick={() => setIsPreviewOpen(true)}
                 />
               </div>
             )}
           </div>
         )}
       </div>
+
+      {isPreviewOpen && dispute.attachmentUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/85 backdrop-blur-xs p-4"
+          onClick={() => setIsPreviewOpen(false)}
+        >
+          <div
+            className="relative max-w-3xl w-full bg-zinc-900 rounded-2xl border border-zinc-700 p-3 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-zinc-800 text-xs text-zinc-200">
+              <span className="font-bold truncate">
+                {dispute.attachmentName || 'Attachment File Proof'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsPreviewOpen(false)}
+                className="p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 cursor-pointer"
+                aria-label="Close attachment preview"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex justify-center max-h-[80vh] overflow-auto">
+              <img
+                src={dispute.attachmentUrl}
+                alt="Attachment Proof"
+                className="max-w-full max-h-[75vh] object-contain rounded-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Request History & Branch Manager Approval Details */}
       <div className="bg-zinc-50 p-2.5 rounded-xl border border-zinc-200 text-[11px] space-y-1.5">

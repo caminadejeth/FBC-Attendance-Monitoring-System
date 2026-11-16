@@ -5,6 +5,10 @@ import {
   generateSampleBiometricDat,
 } from '../utils/fileProcessor';
 import {
+  findUserForEmployeeId,
+  isPlaceholderBranch,
+} from '../utils/timeFormatters';
+import {
   showUploadProcessingAlert,
   showUploadSuccessAlert,
   showUploadErrorAlert,
@@ -57,11 +61,35 @@ export const ZktecoDatUploader: React.FC<ZktecoDatUploaderProps> = ({
     setIsProcessing(false);
 
     if (result.isValid) {
-      const taggedSummaries = result.summaries.map((s) => ({
-        ...s,
-        uploadedByUserId: currentUser?.id,
-        branch: s.branch || currentUser?.department || 'Main Branch',
-      }));
+      const uploaderBranch =
+        (currentUser && !isPlaceholderBranch(currentUser.branch)
+          ? currentUser.branch
+          : undefined) ||
+        (currentUser && !isPlaceholderBranch(currentUser.department)
+          ? currentUser.department
+          : undefined);
+
+      const taggedSummaries = result.summaries.map((s) => {
+        const matchedUser = findUserForEmployeeId(s.employeeId, users);
+        const isShiftBased =
+          !matchedUser ||
+          matchedUser.role === 'STAFF' ||
+          matchedUser.role === 'SHIFT_MANAGER' ||
+          isPlaceholderBranch(matchedUser.department);
+
+        const resolvedBranch =
+          currentUser?.role === 'BRANCH_MANAGER' && isShiftBased
+            ? uploaderBranch || 'Main Branch'
+            : (!isPlaceholderBranch(s.branch) ? s.branch : undefined) ||
+              uploaderBranch ||
+              'Main Branch';
+
+        return {
+          ...s,
+          uploadedByUserId: currentUser?.id,
+          branch: resolvedBranch,
+        };
+      });
       onUploadProcessed(taggedSummaries);
       setLastParsedSummaries(taggedSummaries);
 

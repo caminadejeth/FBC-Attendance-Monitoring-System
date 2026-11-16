@@ -23,6 +23,7 @@ import {
   PanelLeftOpen,
   KeyRound,
   History,
+  Package,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -31,6 +32,7 @@ interface SidebarProps {
   setActiveTab: (tab: string) => void;
   pendingDisputesCount?: number;
   pendingCtoCount?: number;
+  pendingWarehouseCount?: number;
   onLogout: () => void;
   onSyncGoogleSheets?: () => void;
   isSyncing?: boolean;
@@ -43,6 +45,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setActiveTab,
   pendingDisputesCount = 0,
   pendingCtoCount = 0,
+  pendingWarehouseCount = 0,
   onLogout,
   onSyncGoogleSheets,
   isSyncing = false,
@@ -195,6 +198,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             description: 'Employee & Manager directory',
           },
           {
+            id: 'warehouse-inventory',
+            label: 'Warehouse & STR',
+            icon: Package,
+            badge: pendingWarehouseCount > 0 ? pendingWarehouseCount : undefined,
+            description: 'Branch stock & 1/4 STR transfers',
+          },
+          {
             id: 'activity-logs',
             label: 'Activity Log',
             icon: History,
@@ -254,6 +264,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             icon: Award,
             description: 'Compensatory Time Off balance & leave requests',
           },
+          {
+            id: 'warehouse-inventory',
+            label: 'Warehouse & STR',
+            icon: Package,
+            description: 'Branch stock & 1/4 STR transfers',
+          },
         ];
 
       case 'PAYROLL':
@@ -303,9 +319,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
             badge: pendingCtoCount > 0 ? pendingCtoCount : undefined,
             description: 'Compensatory Time Off approval',
           },
+          {
+            id: 'warehouse-inventory',
+            label: 'Warehouse & STR',
+            icon: Package,
+            description: 'Branch stock & 1/4 STR transfers',
+          },
         ];
 
       case 'SHIFT_MANAGER':
+        return [
+          {
+            id: 'my-punches',
+            label: 'My Punches & Hours',
+            icon: Clock,
+            description: 'Daily 8h Flexitime progress',
+          },
+          {
+            id: 'my-schedule',
+            label: 'My Work Schedule',
+            icon: CalendarDays,
+            description: 'Assigned shift & duty days',
+          },
+          {
+            id: 'my-disputes',
+            label: 'File / View Disputes',
+            icon: AlertCircle,
+            description: 'Submit punch adjustments',
+          },
+          {
+            id: 'my-cto',
+            label: 'CTO Leave Requests',
+            icon: Award,
+            description: 'Compensatory Time Off balance & leave requests',
+          },
+          {
+            id: 'warehouse-inventory',
+            label: 'Warehouse & STR',
+            icon: Package,
+            description: 'Branch stock & 1/4 STR transfers',
+          },
+        ];
+
       case 'STAFF':
       default:
         return [
@@ -332,6 +387,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             label: 'CTO Leave Requests',
             icon: Award,
             description: 'Compensatory Time Off balance & leave requests',
+          },
+          {
+            id: 'warehouse-inventory',
+            label: 'Warehouse & STR',
+            icon: Package,
+            description: 'Branch stock & 1/4 STR transfers',
           },
         ];
     }
@@ -375,18 +436,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Backdrop overlay for mobile drawer */}
       {isMobileOpen && (
         <div
-          className="fixed inset-0 bg-zinc-950/60 backdrop-blur-xs z-40 md:hidden"
+          className="fixed inset-0 bg-zinc-950/60 backdrop-blur-xs z-[55] md:hidden"
           onClick={() => setIsMobileOpen(false)}
         />
       )}
 
       {/* Sidebar Main Wrapper Container with Collapsible Width */}
       <aside
-        className={`fixed md:sticky top-0 md:top-[68px] left-0 z-40 md:z-30 h-[100dvh] md:h-[calc(100vh-68px)] bg-zinc-950 text-white border-r-2 border-amber-400/60 shadow-xl flex flex-col justify-between transition-all duration-300 ease-in-out ${
+        className={`fixed md:sticky top-0 md:top-[84px] left-0 z-[60] md:z-30 h-[100dvh] md:h-[calc(100dvh-84px)] bg-zinc-950 text-white border-r-2 border-amber-400/60 shadow-xl flex flex-col justify-between transition-all duration-300 ease-in-out ${
           isCollapsed ? 'md:w-20 w-72' : 'w-72'
         } ${isMobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
       >
         <div className="p-3 space-y-4 overflow-y-auto flex-1">
+          {/* Mobile Drawer Close Header */}
+          <div className="flex md:hidden items-center justify-between border-b border-zinc-800/80 pb-2.5">
+            <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider">
+              NAVIGATION MENU
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsMobileOpen(false)}
+              className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-amber-400 border border-zinc-800 transition-colors cursor-pointer"
+              aria-label="Close Navigation Drawer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
           {/* Desktop Collapse Toggle Bar */}
           <div className="hidden md:flex items-center justify-between border-b border-zinc-800/80 pb-2.5">
             {!isCollapsed && (
@@ -511,7 +587,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {!isCollapsed && (
                       <div className="flex items-center gap-1 shrink-0 ml-2">
                         {item.badge !== undefined && (
-                          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
+                          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white tabular-nums">
                             {item.badge}
                           </span>
                         )}

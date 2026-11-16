@@ -26,7 +26,7 @@ import {
   generateSampleBiometricExcel,
   REQUIRED_HEADERS,
 } from '../utils/fileProcessor';
-import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, getBreakTimes, calculateGrossHours, formatRealtimeTimestamp } from '../utils/timeFormatters';
+import { formatTime12Hr, formatDateWithDay, formatDateMDYY, formatDateMDYYYY, getFilteredSummariesWithAbsents, getBreakTimes, calculateGrossHours, formatRealtimeTimestamp, resolveSummaryBranch } from '../utils/timeFormatters';
 import { isFieldAdjusted, getAdjustedDisplayTime } from '../utils/adjustmentHelper';
 import { exportDisputesToPdf } from '../utils/pdfExportHelper';
 import {
@@ -65,7 +65,14 @@ import {
   PlusCircle,
   Trash2,
   History,
+  Bell,
+  CheckCheck,
+  ArrowRight,
+  Package,
+  CalendarClock,
+  RotateCcw,
 } from 'lucide-react';
+import { AdminAlertItem, formatAlertTimestamp } from '../utils/adminAlerts';
 
 interface AdminDashboardProps {
   users: User[];
@@ -91,6 +98,14 @@ interface AdminDashboardProps {
   onClearActivityLogs?: () => void;
   onSyncGoogleSheets: () => void;
   activeTab: string;
+  onNavigateTab?: (tab: string) => void;
+  adminAlerts?: AdminAlertItem[];
+  readAlertIds?: Set<string>;
+  dismissedAlertCount?: number;
+  onMarkAlertRead?: (alertId: string) => void;
+  onDismissAlert?: (alertId: string) => void;
+  onMarkAllAlertsRead?: () => void;
+  onRestoreDismissedAlerts?: () => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -117,7 +132,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onClearActivityLogs,
   onSyncGoogleSheets,
   activeTab,
+  onNavigateTab,
+  adminAlerts = [],
+  readAlertIds = new Set<string>(),
+  dismissedAlertCount = 0,
+  onMarkAlertRead,
+  onDismissAlert,
+  onMarkAllAlertsRead,
+  onRestoreDismissedAlerts,
 }) => {
+  // Alert Center filter state
+  const [alertFilter, setAlertFilter] = useState<'ALL' | 'WAREHOUSE' | 'DISPUTE' | 'ATTENDANCE'>('ALL');
+  const [showAllAlerts, setShowAllAlerts] = useState(false);
+
   // Activity Log Search & Filter State
   const [logSearchQuery, setLogSearchQuery] = useState('');
   const [logCategoryFilter, setLogCategoryFilter] = useState('ALL');
@@ -202,8 +229,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const remarkText = result.value.trim();
       if (onUpdateSummaryAnomaly) {
         onUpdateSummaryAnomaly(s.id, remarkText);
-      } else {
-        s.anomalies = remarkText ? [remarkText] : [];
       }
       if (onSubmitDispute && remarkText) {
         onSubmitDispute({
@@ -358,7 +383,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     // SweetAlert loading modal
     showUploadProcessingAlert(file.name);
 
-    const result = await parseAndCleanBiometricExcel(file);
+    const result = await parseAndCleanBiometricExcel(file, users);
     setIsProcessing(false);
 
     if (result.isValid) {
@@ -416,8 +441,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         (statusFilter === 'ANOMALY' && s.status !== 'COMPLETE') ||
         (statusFilter === 'LACKING' && (s.status === 'LACKING' || s.status === 'MISSING_IN' || s.status === 'MISSING_OUT'));
 
+      const resolvedBranch = resolveSummaryBranch(s, users);
       const matchesDept =
-        departmentFilter === 'ALL' || s.department === departmentFilter;
+        departmentFilter === 'ALL' ||
+        resolvedBranch === departmentFilter ||
+        s.department === departmentFilter;
 
       return matchesSearch && matchesStatus && matchesDept;
     })
@@ -481,7 +509,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         email: '',
         pin: `${Math.floor(1000 + Math.random() * 9000)}`,
         role: 'STAFF',
-        department: 'YC Main Office',
+        department: 'No fixed branch (Assigned per shift)',
         position: 'Kitchen Master',
         hourlyRate: 120,
         dateHired: new Date().toISOString().split('T')[0],
@@ -496,7 +524,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 5 * 1024 * 1024) {
-        alert('Image file size must be less than 5MB.');
+        showErrorAlert('File Too Large', 'Image file size must be less than 5MB.');
         return;
       }
       const reader = new FileReader();
@@ -527,6 +555,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     const hRate = Number(userFormData.hourlyRate) || 0;
 
+    const resolvedRole = userFormData.role || 'STAFF';
+    const isShiftBasedRole = resolvedRole === 'STAFF' || resolvedRole === 'SHIFT_MANAGER';
+    const resolvedDepartment = isShiftBasedRole
+      ? 'No fixed branch (Assigned per shift)'
+      : (userFormData.department &&
+         userFormData.department !== 'No fixed branch (Assigned per shift)' &&
+         userFormData.department !== 'Store Operations'
+          ? userFormData.department
+          : 'YC Ebloc');
+
     const savedUser: User = {
       id: editingUser ? editingUser.id : `usr-${Date.now()}`,
       employeeId: userFormData.employeeId,
@@ -536,8 +574,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       lastName: lName,
       email: userFormData.email || `${fName.toLowerCase() || 'staff'}@fbcrestaurants.com`,
       pin: userFormData.pin,
-      role: userFormData.role || 'STAFF',
-      department: userFormData.department || 'YC Ebloc',
+      role: resolvedRole,
+      department: resolvedDepartment,
       position: userFormData.position || 'Staff Member',
       hourlyRate: hRate,
       dateHired: userFormData.dateHired || new Date().toISOString().split('T')[0],
@@ -612,6 +650,232 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* ADMIN ACTION ALERTS CENTER - Overview Tab */}
+      {(activeTab === 'overview' || activeTab === 'dashboard' || activeTab === 'all') && (() => {
+        const unreadAlertsCount = adminAlerts.filter((a) => !readAlertIds.has(a.id)).length;
+        const criticalAlertsCount = adminAlerts.filter((a) => a.severity === 'critical').length;
+        const filteredOverviewAlerts = adminAlerts.filter((a) => {
+          if (alertFilter === 'WAREHOUSE') return a.category === 'STR' || a.category === 'LOW_STOCK';
+          if (alertFilter === 'DISPUTE') return a.category === 'DISPUTE';
+          if (alertFilter === 'ATTENDANCE') return a.category === 'ATTENDANCE' || a.category === 'CTO';
+          return true;
+        });
+        const visibleAlerts = showAllAlerts
+          ? filteredOverviewAlerts
+          : filteredOverviewAlerts.slice(0, 6);
+
+        return (
+          <section
+            aria-label="Admin Alert Notifications"
+            className="bg-white rounded-2xl border border-[#D3D8C8] p-5 shadow-xs space-y-4"
+          >
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-zinc-100">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-zinc-950 text-amber-400 flex items-center justify-center shrink-0">
+                  <Bell className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-base font-extrabold text-[#2C3524]">
+                      Admin Alert Notifications
+                    </h2>
+                    <span className="text-xs font-bold text-zinc-500 tabular-nums">
+                      · {unreadAlertsCount} unread · {criticalAlertsCount} critical
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Live queue for pending STR reviews, monitored branch low stock, timecard disputes, and missing punches.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center gap-1 bg-zinc-100 p-1 rounded-xl border border-zinc-200">
+                  {(
+                    [
+                      { id: 'ALL', label: `All (${adminAlerts.length})` },
+                      {
+                        id: 'WAREHOUSE',
+                        label: `STR & Stock (${
+                          adminAlerts.filter((a) => a.category === 'STR' || a.category === 'LOW_STOCK').length
+                        })`,
+                      },
+                      {
+                        id: 'DISPUTE',
+                        label: `Disputes (${adminAlerts.filter((a) => a.category === 'DISPUTE').length})`,
+                      },
+                      {
+                        id: 'ATTENDANCE',
+                        label: `Attendance (${
+                          adminAlerts.filter((a) => a.category === 'ATTENDANCE' || a.category === 'CTO').length
+                        })`,
+                      },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setAlertFilter(tab.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold whitespace-nowrap shrink-0 cursor-pointer transition-colors tabular-nums ${
+                        alertFilter === tab.id
+                          ? 'bg-zinc-900 text-amber-400'
+                          : 'text-zinc-600 hover:text-zinc-900'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {unreadAlertsCount > 0 && onMarkAllAlertsRead && (
+                  <button
+                    type="button"
+                    onClick={onMarkAllAlertsRead}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-800 text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                  >
+                    <CheckCheck className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Mark all read</span>
+                  </button>
+                )}
+
+                {dismissedAlertCount > 0 && onRestoreDismissedAlerts && (
+                  <button
+                    type="button"
+                    onClick={onRestoreDismissedAlerts}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Restore ({dismissedAlertCount})</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {filteredOverviewAlerts.length === 0 ? (
+              <div className="py-8 px-4 rounded-xl border border-dashed border-zinc-200 bg-zinc-50/70 text-center space-y-1.5">
+                <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto" />
+                <p className="text-xs font-bold text-zinc-800">
+                  No active alerts in this view
+                </p>
+                <p className="text-[11px] text-zinc-500">
+                  Pending STR requisitions, low stock thresholds, and employee disputes will surface here automatically.
+                </p>
+              </div>
+            ) : (
+              <div className="border border-zinc-200 rounded-xl divide-y divide-zinc-100 overflow-hidden">
+                {visibleAlerts.map((alert) => {
+                  const isRead = readAlertIds.has(alert.id);
+                  const sevText =
+                    alert.severity === 'critical'
+                      ? 'text-rose-700'
+                      : alert.severity === 'warning'
+                      ? 'text-amber-800'
+                      : 'text-sky-700';
+                  const iconBox =
+                    alert.severity === 'critical'
+                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                      : alert.severity === 'warning'
+                      ? 'bg-amber-50 text-amber-800 border-amber-200'
+                      : 'bg-sky-50 text-sky-700 border-sky-200';
+
+                  const IconComponent =
+                    alert.category === 'STR' || alert.category === 'LOW_STOCK'
+                      ? Package
+                      : alert.category === 'DISPUTE'
+                      ? Clock
+                      : alert.category === 'CTO'
+                      ? CalendarClock
+                      : AlertTriangle;
+
+                  return (
+                    <div
+                      key={alert.id}
+                      className={`px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
+                        isRead ? 'bg-white opacity-75' : 'bg-amber-50/35 hover:bg-amber-50/60'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3 min-w-0">
+                        <div className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 mt-0.5 ${iconBox}`}>
+                          <IconComponent className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`text-[10px] font-black uppercase tracking-wider ${sevText}`}>
+                              {alert.severity === 'critical'
+                                ? 'Critical'
+                                : alert.severity === 'warning'
+                                ? 'Action Needed'
+                                : 'Notice'}{' '}
+                              · {alert.category.replace('_', ' ')}
+                            </span>
+                            <span className="text-[10px] font-mono text-zinc-500 tabular-nums">
+                              {formatAlertTimestamp(alert.timestamp)}
+                            </span>
+                            {!isRead && (
+                              <span className="text-[10px] font-extrabold text-rose-700 uppercase tracking-wider">
+                                · Unread
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs font-extrabold text-zinc-900 mt-0.5">
+                            {alert.title}
+                          </div>
+                          <p className="text-[11px] text-zinc-600 mt-0.5">
+                            {alert.description}
+                          </p>
+                          <div className="text-[10px] text-zinc-500 font-medium mt-0.5">
+                            {alert.meta}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onMarkAlertRead) onMarkAlertRead(alert.id);
+                            if (onNavigateTab) onNavigateTab(alert.targetTab);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-xs font-black whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                        >
+                          <span>{alert.actionLabel}</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                        {onDismissAlert && (
+                          <button
+                            type="button"
+                            onClick={() => onDismissAlert(alert.id)}
+                            title="Dismiss alert"
+                            aria-label={`Dismiss ${alert.title}`}
+                            className="p-1.5 rounded-lg border border-zinc-200 bg-white hover:bg-zinc-100 text-zinc-500 hover:text-zinc-800 cursor-pointer transition-colors"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {filteredOverviewAlerts.length > 6 && (
+              <div className="flex justify-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowAllAlerts((prev) => !prev)}
+                  className="text-xs font-bold text-amber-800 hover:text-zinc-950 cursor-pointer tabular-nums"
+                >
+                  {showAllAlerts
+                    ? 'Show fewer alerts'
+                    : `Show all ${filteredOverviewAlerts.length} alerts`}
+                </button>
+              </div>
+            )}
+          </section>
+        );
+      })()}
 
       {/* SECTION: ZKTECO OLD VERSION .DAT FILE UPLOADER */}
       {activeTab === 'upload-dat' && (
@@ -756,18 +1020,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </p>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
                 id="btn-admin-clear-uploaded-logs-table"
                 onClick={handleClearUploadedLogs}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-xs uppercase tracking-wider border border-rose-300 shadow-2xs cursor-pointer transition-colors"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-xs uppercase tracking-wider border border-rose-300 shadow-2xs cursor-pointer transition-colors whitespace-nowrap"
               >
                 <Trash2 className="w-4 h-4 text-rose-600" /> Clear Uploaded Logs
               </button>
               <button
                 id="btn-admin-request-time-adjustment"
                 onClick={() => setShowAdjustmentModal(true)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer shrink-0"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer shrink-0 whitespace-nowrap"
               >
                 <PlusCircle className="w-4 h-4" /> Request Time Adjustment
               </button>
@@ -868,8 +1132,159 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Logs Table */}
-          <div className="overflow-x-auto border border-gray-200 rounded-xl">
+          {/* Mobile Attendance Log Cards */}
+          <div className="md:hidden space-y-2.5">
+            {filteredSummaries.length === 0 ? (
+              <div className="p-6 text-center text-xs text-gray-400 border border-dashed border-gray-200 rounded-xl bg-gray-50/50">
+                No matching attendance records found.
+              </div>
+            ) : (
+              filteredSummaries.map((s) => {
+                const breakTimes = getBreakTimes(s.punches);
+                const grossHours = calculateGrossHours(s.firstIn, s.lastOut);
+                const existingDispute = disputes.find(
+                  (d) => d.employeeId === s.employeeId && d.targetDate === s.date
+                );
+                const isAbsent = s.status === 'ABSENT';
+                const hasClockIn = Boolean(s.firstIn && s.firstIn !== 'No Data' && s.firstIn !== '--');
+                const hasClockOut = Boolean(s.lastOut && s.lastOut !== 'No Data' && s.lastOut !== '--');
+                const hasBreakOut = Boolean(breakTimes.breakOut && breakTimes.breakOut !== 'No Data' && breakTimes.breakOut !== '--');
+                const hasBreakIn = Boolean(breakTimes.breakIn && breakTimes.breakIn !== 'No Data' && breakTimes.breakIn !== '--');
+                const missingPunches: string[] = [];
+                if (!isAbsent) {
+                  if (!hasClockIn) missingPunches.push('Clock-In');
+                  if (!hasBreakOut) missingPunches.push('Break-Out');
+                  if (!hasBreakIn) missingPunches.push('Break-In');
+                  if (!hasClockOut) missingPunches.push('Clock-Out');
+                }
+                const clockInVal = getAdjustedDisplayTime(s, 'firstIn', disputes) || s.firstIn;
+                const breakOutVal = getAdjustedDisplayTime(s, 'breakOut', disputes) || s.breakOut;
+                const breakInVal = getAdjustedDisplayTime(s, 'breakIn', disputes) || s.breakIn;
+                const clockOutVal = getAdjustedDisplayTime(s, 'lastOut', disputes) || s.lastOut;
+
+                return (
+                  <div key={`mob-log-${s.id}`} className="rounded-xl border border-gray-200 bg-white p-3.5 space-y-2.5 shadow-2xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-sm text-[#2C3524] truncate">{s.employeeName}</div>
+                        <div className="text-[11px] font-mono text-gray-500">
+                          {s.employeeId} · {resolveSummaryBranch(s, users)}
+                        </div>
+                        <div className="text-[11px] font-mono font-bold text-[#2C3524] mt-0.5">
+                          {formatDateMDYYYY(s.date)} · {s.weekday}
+                        </div>
+                      </div>
+                      <div className="shrink-0">
+                        {isAbsent ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-100 text-rose-950 border border-rose-300 whitespace-nowrap">
+                            ✕ Absent
+                          </span>
+                        ) : missingPunches.length > 0 ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-950 border border-amber-400">
+                            ⚡ Missing {missingPunches.length}
+                          </span>
+                        ) : s.status === 'COMPLETE' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-900 border border-emerald-300 whitespace-nowrap">
+                            ✓ Complete
+                          </span>
+                        ) : s.status === 'UNDERTIME' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-900 border border-amber-300 whitespace-nowrap">
+                            ⚠ Undertime
+                          </span>
+                        ) : s.status === 'OVERTIME' ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-sky-100 text-sky-900 border border-sky-300 whitespace-nowrap">
+                            ★ Overtime
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-gray-100 text-gray-800 border border-gray-300 whitespace-nowrap">
+                            {s.status}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5 text-[11px] font-mono bg-[#F7F8F5] p-2 rounded-lg border border-[#D3D8C8]/70">
+                      <div>
+                        <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Clock In</span>
+                        {isFieldAdjusted(s, 'firstIn', disputes) ? (
+                          <span className="adjusted-time-blinking">{clockInVal ? formatTime12Hr(clockInVal) : '08:00 AM'} Adj</span>
+                        ) : clockInVal ? formatTime12Hr(clockInVal) : <span className="text-rose-500 font-bold">No Data</span>}
+                      </div>
+                      <div>
+                        <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Clock Out</span>
+                        {isFieldAdjusted(s, 'lastOut', disputes) ? (
+                          <span className="adjusted-time-blinking">{clockOutVal ? formatTime12Hr(clockOutVal) : '05:00 PM'} Adj</span>
+                        ) : clockOutVal ? formatTime12Hr(clockOutVal) : <span className="text-rose-500 font-bold">No Data</span>}
+                      </div>
+                      <div>
+                        <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Break Out</span>
+                        {isFieldAdjusted(s, 'breakOut', disputes) ? (
+                          <span className="adjusted-time-blinking">{breakOutVal ? formatTime12Hr(breakOutVal) : '12:00 PM'} Adj</span>
+                        ) : breakOutVal ? formatTime12Hr(breakOutVal) : breakTimes.breakOut && breakTimes.breakOut !== '--' && breakTimes.breakOut !== 'No Data' ? breakTimes.breakOut : 'No Data'}
+                      </div>
+                      <div>
+                        <span className="text-[9.5px] font-sans font-bold uppercase text-gray-500 block">Break In</span>
+                        {isFieldAdjusted(s, 'breakIn', disputes) ? (
+                          <span className="adjusted-time-blinking">{breakInVal ? formatTime12Hr(breakInVal) : '01:00 PM'} Adj</span>
+                        ) : breakInVal ? formatTime12Hr(breakInVal) : breakTimes.breakIn && breakTimes.breakIn !== '--' && breakTimes.breakIn !== 'No Data' ? breakTimes.breakIn : 'No Data'}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-1 text-center text-[11px] font-mono bg-gray-50 rounded-lg p-1.5 border border-gray-200">
+                      <div>
+                        <span className="block text-[9px] font-sans text-gray-500 uppercase">Break</span>
+                        <span className="font-bold text-gray-700">{s.totalBreakMinutes}m</span>
+                      </div>
+                      <div>
+                        <span className="block text-[9px] font-sans text-gray-500 uppercase">Gross</span>
+                        <span className="font-bold text-gray-700">{grossHours.toFixed(1)}h</span>
+                      </div>
+                      <div>
+                        <span className="block text-[9px] font-sans text-gray-500 uppercase">Worked</span>
+                        <span className="font-extrabold text-[#2C3524]">{s.netHoursWorked.toFixed(1)}h</span>
+                      </div>
+                      <div>
+                        <span className="block text-[9px] font-sans text-gray-500 uppercase">OT</span>
+                        <span className="font-bold text-sky-700">{s.overtimeHours > 0 ? `+${s.overtimeHours.toFixed(1)}h` : '0.0h'}</span>
+                      </div>
+                    </div>
+
+                    <div className="text-[11px]">
+                      {existingDispute ? (
+                        <div className={`px-2 py-1 rounded-md font-bold text-[10px] ${existingDispute.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' : existingDispute.status === 'REJECTED' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-900 border border-amber-300'}`}>
+                          📌 {existingDispute.status}: {existingDispute.reason}
+                        </div>
+                      ) : s.anomalies.length > 0 ? (
+                        <div className="text-gray-600 text-[10px]">{s.anomalies.join('; ')}</div>
+                      ) : null}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-gray-100">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenRemarkPrompt(s)}
+                        className="text-[11px] font-extrabold text-amber-800 hover:text-zinc-950 bg-amber-100 hover:bg-amber-200 px-2.5 py-1 rounded-md border border-amber-400 inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      >
+                        💬 Concern / Remark
+                      </button>
+                      {onDeleteSummary && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSummaryClick(s)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-bold cursor-pointer whitespace-nowrap"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Logs Table (Desktop) */}
+          <div className="hidden md:block overflow-x-auto border border-gray-200 rounded-xl">
             <table className="w-full text-left text-xs min-w-[1200px]">
               <thead className="bg-[#F7F8F5] text-[#4A543E] font-bold uppercase tracking-wider border-b border-gray-200">
                 <tr>
@@ -931,7 +1346,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </td>
                         <td className="p-3">
                           <div className="font-bold text-[#2C3524]">{s.employeeName}</div>
-                          <div className="text-[10px] text-gray-400 font-medium">{s.department}</div>
+                          <div className="text-[10px] text-gray-400 font-medium">{resolveSummaryBranch(s, users)}</div>
                         </td>
                         <td className="p-3 font-mono font-bold text-[#2C3524] whitespace-nowrap">
                           {formatDateMDYYYY(s.date)}
@@ -1113,7 +1528,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         return (
           <div className="bg-white rounded-2xl border border-[#D3D8C8] p-6 shadow-xs space-y-4">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-zinc-150">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-zinc-200">
               <div>
                 <h2 className="text-base font-bold text-[#2C3524] flex items-center gap-2">
                   <AlertCircle className="w-5 h-5 text-amber-600" />
@@ -1123,17 +1538,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   Review staff requests, attached proof files, request history, and exact manager approval timestamps.
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   id="btn-export-pdf-disputes-admin"
                   onClick={() => exportDisputesToPdf(filteredAdminDisputes, adminDisputeBranchFilter)}
-                  className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-amber-400 font-black text-xs uppercase tracking-wider rounded-xl border border-zinc-950 shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                  className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-amber-400 font-black text-xs uppercase tracking-wider rounded-xl border border-zinc-950 shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
                 >
                   <FileText className="w-4 h-4 text-amber-400" />
                   Export PDF (4/Page)
                 </button>
                 {pendingCount > 0 && (
-                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300 whitespace-nowrap">
                     {pendingCount} Pending Approval
                   </span>
                 )}
@@ -1186,8 +1601,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   >
                     {st === 'ALL' && `All (${disputes.length})`}
                     {st === 'PENDING' && `Pending (${pendingCount})`}
-                    {st === 'APPROVED' && `Approved (${approvedCount})`}
-                    {st === 'REJECTED' && `Rejected (${rejectedCount})`}
+                    {st === 'APPROVED' && `History / Approved (${approvedCount})`}
+                    {st === 'REJECTED' && `History / Rejected (${rejectedCount})`}
                   </button>
                 ))}
               </div>
@@ -1228,7 +1643,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               : 'bg-rose-200 text-rose-800'
                           }`}
                         >
-                          {d.status}
+                          {d.status === 'APPROVED' ? 'APPROVED (HISTORY)' : d.status === 'REJECTED' ? 'REJECTED (HISTORY)' : d.status}
                         </span>
                         {onDeleteDispute && (
                           <button
@@ -1303,8 +1718,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             (u.passcodePin && u.passcodePin.includes(q)) ||
             (u.email && u.email.toLowerCase().includes(q));
 
+          const roleUpper = u.role.toUpperCase();
           const matchesRole =
-            userRoleFilter === 'ALL' || u.role.toUpperCase() === userRoleFilter.toUpperCase();
+            userRoleFilter === 'ALL'
+              ? true
+              : userRoleFilter === 'MANAGER'
+              ? roleUpper === 'BRANCH_MANAGER' || roleUpper === 'SHIFT_MANAGER'
+              : roleUpper === userRoleFilter.toUpperCase();
 
           return matchesQuery && matchesRole;
         });
@@ -1373,14 +1793,126 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <option value="ALL">All Roles ({users.length})</option>
                   <option value="STAFF">Staff Only</option>
-                  <option value="MANAGER">Branch Managers</option>
+                  <option value="MANAGER">All Managers (Branch & Shift)</option>
+                  <option value="BRANCH_MANAGER">Branch Managers Only</option>
+                  <option value="SHIFT_MANAGER">Shift Managers Only</option>
                   <option value="PAYROLL">Payroll / HR</option>
                   <option value="ADMIN">Administrators</option>
                 </select>
               </div>
             </div>
 
-            <div className="overflow-x-auto border border-gray-200 rounded-xl">
+            {/* Mobile User Account Cards */}
+            <div className="md:hidden space-y-2.5">
+              {filteredUserAccounts.length === 0 ? (
+                <div className="p-6 text-center text-xs text-gray-500 font-bold border border-dashed border-gray-200 rounded-xl bg-gray-50/50">
+                  {userSearchQuery.trim()
+                    ? `No user accounts found matching "${userSearchQuery}".`
+                    : 'No user accounts match the selected role filter.'}
+                </div>
+              ) : (
+                filteredUserAccounts.map((u) => (
+                  <div key={`mob-usr-${u.id}`} className="rounded-xl border border-gray-200 bg-white p-3.5 space-y-2.5 shadow-2xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {u.avatarUrl ? (
+                          <img
+                            src={u.avatarUrl}
+                            alt={u.name}
+                            className="w-9 h-9 rounded-full object-cover border border-[#656D4A] shrink-0"
+                          />
+                        ) : (
+                          <div className="w-9 h-9 rounded-full bg-amber-200 text-[#2C3524] flex items-center justify-center font-black text-xs shrink-0 border border-amber-400">
+                            {u.firstName?.[0] || u.name?.[0] || 'U'}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="font-bold text-sm text-[#2C3524] truncate">{u.name}</div>
+                          <div className="text-[11px] text-gray-500 font-mono">{u.employeeId}</div>
+                        </div>
+                      </div>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                          u.status === 'ACTIVE'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-gray-200 text-gray-600'
+                        }`}
+                      >
+                        {u.status}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#E6E8DE] text-[#2C3524]">
+                        {u.role}
+                      </span>
+                      {u.role === 'STAFF' || u.role === 'SHIFT_MANAGER' ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-900 border border-amber-200/80">
+                          No fixed branch (Assigned per shift)
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-700">
+                          {u.department}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-[11px] bg-[#F7F8F5] p-2 rounded-lg border border-[#D3D8C8]/70">
+                      <div>
+                        <span className="block text-[9.5px] text-gray-500 uppercase font-bold">Position</span>
+                        <span className="font-semibold text-gray-800 truncate block">{u.position}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[9.5px] text-gray-500 uppercase font-bold">PIN</span>
+                        <span className="font-mono font-bold text-gray-800">{u.pin}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[9.5px] text-gray-500 uppercase font-bold">Hired</span>
+                        <span className="font-mono font-bold text-gray-700">{u.dateHired || 'N/A'}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-1.5 border-t border-gray-100">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenUserModal(u)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs font-bold cursor-pointer"
+                      >
+                        <Edit className="w-3.5 h-3.5" /> Edit
+                      </button>
+                      {onDeleteUser && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const confirm = await yellowCabSwal.fire({
+                              title: 'Delete Employee Account?',
+                              text: `Are you sure you want to permanently delete ${u.name} (${u.employeeId})? This action cannot be undone.`,
+                              icon: 'warning',
+                              showCancelButton: true,
+                              confirmButtonText: 'Yes, Delete Account',
+                              cancelButtonText: 'Cancel',
+                              confirmButtonColor: '#dc2626',
+                            });
+                            if (confirm.isConfirmed) {
+                              onDeleteUser(u.id);
+                              showSuccessAlert(
+                                'User Account Deleted',
+                                `Employee account for ${u.name} (${u.employeeId}) has been deleted.`
+                              );
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold cursor-pointer"
+                        >
+                          <UserX className="w-3.5 h-3.5" /> Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto border border-gray-200 rounded-xl">
               <table className="w-full text-left text-xs">
                 <thead className="bg-[#F7F8F5] text-[#4A543E] font-bold uppercase tracking-wider border-b border-gray-200">
                   <tr>
@@ -1398,7 +1930,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {filteredUserAccounts.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="p-8 text-center text-gray-500 font-bold bg-white">
-                        No user accounts found matching "{userSearchQuery}".
+                        {userSearchQuery.trim()
+                          ? `No user accounts found matching "${userSearchQuery}".`
+                          : 'No user accounts match the selected role filter.'}
                       </td>
                     </tr>
                   ) : (
@@ -1430,9 +1964,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </span>
                       </td>
                       <td className="p-3">
-                        {u.role === 'STAFF' ? (
+                        {u.role === 'STAFF' || u.role === 'SHIFT_MANAGER' ? (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-900 border border-amber-200/80">
-                            Dynamic (Randomly Assigned)
+                            No fixed branch (Assigned per shift)
                           </span>
                         ) : (
                           u.department
@@ -1539,7 +2073,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <label className="block text-xs font-black text-[#2C3524] uppercase tracking-wider mb-2">
                   Employee Profile Picture
                 </label>
-                <div className="flex items-center gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
                   {/* Avatar Preview */}
                   <div className="relative group shrink-0">
                     {userFormData.avatarUrl ? (
@@ -1706,19 +2240,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               {/* BRANCH & ROLE */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-gray-700 mb-1">
-                    Branch {userFormData.role === 'STAFF' && <span className="text-gray-400 font-normal">(Dynamic)</span>}
+                    Branch {(userFormData.role === 'STAFF' || userFormData.role === 'SHIFT_MANAGER') && <span className="text-gray-400 font-normal">(Dynamic)</span>}
                   </label>
-                  {userFormData.role === 'STAFF' ? (
-                    <div className="w-full px-3 py-2 border border-amber-200 bg-amber-50/60 rounded-xl text-xs font-semibold text-amber-900 flex items-center gap-1.5 h-[38px]">
+                  {(userFormData.role === 'STAFF' || userFormData.role === 'SHIFT_MANAGER') ? (
+                    <div className="w-full px-3 py-2 border border-amber-200 bg-amber-50/60 rounded-xl text-xs font-semibold text-amber-900 flex items-center gap-1.5 min-h-[38px]">
                       <span>⚡ No fixed branch (Assigned per shift)</span>
                     </div>
                   ) : (
                     <select
                       id="select-user-department"
-                      value={userFormData.department || 'YC Ebloc'}
+                      value={
+                        userFormData.department &&
+                        userFormData.department !== 'No fixed branch (Assigned per shift)' &&
+                        userFormData.department !== 'Store Operations'
+                          ? userFormData.department
+                          : 'YC Ebloc'
+                      }
                       onChange={(e) =>
                         setUserFormData({ ...userFormData, department: e.target.value })
                       }
@@ -1742,10 +2282,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     value={userFormData.role || 'STAFF'}
                     onChange={(e) => {
                       const newRole = e.target.value as any;
+                      const isShiftBased = newRole === 'STAFF' || newRole === 'SHIFT_MANAGER';
                       setUserFormData({
                         ...userFormData,
                         role: newRole,
-                        department: newRole === 'STAFF' ? 'Store Operations' : (userFormData.department || 'YC Ebloc'),
+                        department: isShiftBased
+                          ? 'No fixed branch (Assigned per shift)'
+                          : (userFormData.department &&
+                             userFormData.department !== 'No fixed branch (Assigned per shift)' &&
+                             userFormData.department !== 'Store Operations'
+                              ? userFormData.department
+                              : 'YC Ebloc'),
                       });
                     }}
                     className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs font-bold text-gray-800 focus:ring-2 focus:ring-[#656D4A] focus:outline-none"

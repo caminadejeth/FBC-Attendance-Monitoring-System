@@ -11,12 +11,15 @@ import {
   showDisputeSuccessAlert,
   showExportToast,
 } from '../utils/sweetAlerts';
+import { exportDisputesToPdf } from '../utils/pdfExportHelper';
+import { resolveSummaryBranch } from '../utils/timeFormatters';
 import * as XLSX from 'xlsx';
 import {
   Clock,
   Calendar,
   AlertCircle,
   FileSpreadsheet,
+  FileText,
   PlusCircle,
   CheckCircle2,
   AlertTriangle,
@@ -78,8 +81,9 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   const mySummaries = summaries.filter((s) => s.employeeId === currentUser.employeeId);
   const myDisputes = disputes.filter((d) => d.employeeId === currentUser.employeeId);
 
-  // File Dispute Modal State
+  // File Dispute Modal & Filter State
   const [showDisputeModal, setShowDisputeModal] = useState(false);
+  const [staffDisputeFilter, setStaffDisputeFilter] = useState<'PENDING' | 'HISTORY' | 'ALL'>('PENDING');
   const [selectedSummaryForDispute, setSelectedSummaryForDispute] = useState<AttendanceSummaryDaily | null>(null);
   const [disputeType, setDisputeType] = useState<DisputeRequest['type']>('MISSING_PUNCH');
   const [disputeReason, setDisputeReason] = useState('');
@@ -138,6 +142,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     const exportData = mySummaries.map((s) => ({
       'Employee ID': s.employeeId,
       'Employee Name': s.employeeName,
+      'Branch': resolveSummaryBranch(s, users, currentUser),
       'Date': s.date,
       'Weekday': s.weekday,
       'Clock In': s.firstIn || 'MISSING',
@@ -252,6 +257,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       {(activeTab === 'my-punches' || activeTab === 'all') && (
         <PersonalPunchesTable
           currentUser={currentUser}
+          users={users}
           summaries={summaries}
           disputes={disputes}
           ctoRequests={ctoRequests}
@@ -265,57 +271,179 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       {/* MY SUBMITTED DISPUTES TRACKER */}
       {(activeTab === 'my-disputes' || activeTab === 'all') && (
         <div className="bg-white rounded-2xl border border-[#D3D8C8] p-6 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-bold text-[#2C3524]">My Dispute & Adjustment Tickets</h3>
-              <p className="text-xs text-gray-500">Track status of submitted disputes with management</p>
+              <p className="text-xs text-gray-500">Track status of submitted time adjustments and view approved adjustment history</p>
             </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                id="btn-export-pdf-disputes-staff"
+                onClick={() => {
+                  const pendingItems = myDisputes.filter((d) => d.status === 'PENDING');
+                  const historyItems = myDisputes.filter((d) => d.status !== 'PENDING');
+                  const activeList =
+                    staffDisputeFilter === 'PENDING'
+                      ? pendingItems
+                      : staffDisputeFilter === 'HISTORY'
+                      ? historyItems
+                      : myDisputes;
+                  const itemsToExport = activeList.length > 0 ? activeList : myDisputes;
+                  exportDisputesToPdf(itemsToExport, currentUser.branch || currentUser.department || 'Personal');
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-amber-400 text-xs font-extrabold border border-zinc-950 shadow-2xs transition-colors cursor-pointer shrink-0"
+              >
+                <FileText className="w-4 h-4 text-amber-400" />
+                Export PDF (4/Page)
+              </button>
+              <button
+                id="btn-file-time-adjustment-staff"
+                onClick={() => handleOpenDispute()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 text-xs font-extrabold border border-zinc-950 shadow-2xs transition-colors cursor-pointer shrink-0"
+              >
+                <PlusCircle className="w-4 h-4" />
+                File Time Adjustment Request
+              </button>
+            </div>
+          </div>
+
+          {/* Filter Pills */}
+          <div className="flex items-center gap-1.5 p-1 bg-zinc-100 rounded-xl text-xs font-bold border border-zinc-200">
             <button
-              id="btn-file-time-adjustment-staff"
-              onClick={() => handleOpenDispute()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 text-xs font-extrabold border border-zinc-950 shadow-2xs transition-colors cursor-pointer"
+              type="button"
+              onClick={() => setStaffDisputeFilter('PENDING')}
+              className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${
+                staffDisputeFilter === 'PENDING'
+                  ? 'bg-amber-400 text-zinc-950 font-black shadow-2xs'
+                  : 'text-zinc-600 hover:text-zinc-900'
+              }`}
             >
-              <PlusCircle className="w-4 h-4" />
-              File Time Adjustment Request
+              Pending ({myDisputes.filter((d) => d.status === 'PENDING').length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStaffDisputeFilter('HISTORY')}
+              className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${
+                staffDisputeFilter === 'HISTORY'
+                  ? 'bg-emerald-600 text-white font-black shadow-2xs'
+                  : 'text-zinc-600 hover:text-zinc-900'
+              }`}
+            >
+              Adjustment History ({myDisputes.filter((d) => d.status !== 'PENDING').length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStaffDisputeFilter('ALL')}
+              className={`px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${
+                staffDisputeFilter === 'ALL'
+                  ? 'bg-zinc-900 text-white font-black shadow-2xs'
+                  : 'text-zinc-600 hover:text-zinc-900'
+              }`}
+            >
+              All ({myDisputes.length})
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {myDisputes.length === 0 ? (
-              <div className="col-span-2 p-8 text-center text-gray-400">
-                You have not filed any dispute requests yet.
-              </div>
-            ) : (
-              myDisputes.map((d) => (
+          <div>
+            {(() => {
+              const pendingItems = myDisputes.filter((d) => d.status === 'PENDING');
+              const historyItems = myDisputes.filter((d) => d.status !== 'PENDING');
+              const displayList =
+                staffDisputeFilter === 'PENDING'
+                  ? pendingItems
+                  : staffDisputeFilter === 'HISTORY'
+                  ? historyItems
+                  : myDisputes;
+
+              if (displayList.length === 0) {
+                return (
+                  <div className="p-8 text-center bg-zinc-50 rounded-2xl border border-dashed border-zinc-300 space-y-1">
+                    <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto" />
+                    <p className="text-xs font-bold text-zinc-700">
+                      {staffDisputeFilter === 'PENDING'
+                        ? 'No Pending Adjustment Tickets'
+                        : staffDisputeFilter === 'HISTORY'
+                        ? 'No Adjustment History Records'
+                        : 'No Dispute Requests Filed'}
+                    </p>
+                    <p className="text-[11px] text-zinc-500">
+                      {staffDisputeFilter === 'PENDING'
+                        ? 'All your filed requests have been processed. Check "Adjustment History" to view past approvals.'
+                        : 'You currently have no historical time adjustment tickets.'}
+                    </p>
+                  </div>
+                );
+              }
+
+              const renderCard = (d: DisputeRequest) => (
                 <div
                   key={d.id}
-                  className="p-4 rounded-xl border border-gray-200 bg-white space-y-2"
+                  className={`p-4 rounded-xl border-2 transition-all ${
+                    d.status === 'PENDING'
+                      ? 'border-amber-300 bg-amber-50/40'
+                      : d.status === 'APPROVED'
+                      ? 'border-emerald-300 bg-emerald-50/30'
+                      : 'border-rose-200 bg-rose-50/30'
+                  }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-[#2C3524]">{d.date}</span>
+                  <div className="flex items-center justify-between pb-2 border-b border-zinc-200/60">
+                    <span className="text-xs font-extrabold text-[#2C3524]">Target Date: {d.date}</span>
                     <span
-                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
                         d.status === 'PENDING'
-                          ? 'bg-amber-100 text-amber-800'
+                          ? 'bg-amber-400 text-zinc-950'
                           : d.status === 'APPROVED'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-rose-100 text-rose-800'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-rose-600 text-white'
                       }`}
                     >
-                      {d.status}
+                      {d.status === 'APPROVED' ? 'APPROVED (HISTORY)' : d.status === 'REJECTED' ? 'REJECTED (HISTORY)' : d.status}
                     </span>
                   </div>
 
                   <DisputeCardDetails dispute={d} />
 
                   {d.adminNotes && (
-                    <div className="text-[11px] text-[#656D4A] font-semibold italic">
-                      Admin Note: {d.adminNotes}
+                    <div className="text-[11px] text-[#656D4A] font-semibold italic pt-1">
+                      Note: {d.adminNotes}
                     </div>
                   )}
                 </div>
-              ))
-            )}
+              );
+
+              if (staffDisputeFilter === 'ALL') {
+                return (
+                  <div className="space-y-6">
+                    {pendingItems.length > 0 && (
+                      <div className="space-y-2">
+                        <h4 className="text-xs font-black uppercase text-amber-900 tracking-wider flex items-center gap-1.5 border-b pb-1">
+                          <Clock className="w-3.5 h-3.5 text-amber-600" /> Pending Tickets ({pendingItems.length})
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {pendingItems.map(renderCard)}
+                        </div>
+                      </div>
+                    )}
+                    {historyItems.length > 0 && (
+                      <div className="space-y-2">
+                        <h4 className="text-xs font-black uppercase text-emerald-900 tracking-wider flex items-center gap-1.5 border-b pb-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Time Adjustment History ({historyItems.length})
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {historyItems.map(renderCard)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {displayList.map(renderCard)}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

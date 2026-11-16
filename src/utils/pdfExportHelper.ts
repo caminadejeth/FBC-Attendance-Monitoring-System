@@ -1,22 +1,37 @@
 import { DisputeRequest } from '../types';
+import { showErrorAlert } from './sweetAlerts';
 
 export function exportDisputesToPdf(
   disputes: DisputeRequest[],
   branchFilter: string = 'ALL'
 ) {
   if (!disputes || disputes.length === 0) {
-    alert('No time adjustment or dispute records available to export.');
+    showErrorAlert('Nothing to Export', 'No time adjustment or dispute records available to export.');
     return;
   }
 
-  // Filter list if branch is specified
-  const listToExport = disputes.filter((d) => {
-    if (branchFilter === 'ALL') return true;
-    return d.branch === branchFilter || d.department === branchFilter;
-  });
+  // Smart filtering: Filter list if branch is specified, but fallback to disputes array if already pre-filtered
+  let listToExport = disputes;
+  if (branchFilter && branchFilter !== 'ALL') {
+    const filterLower = branchFilter.toLowerCase().trim();
+    const filtered = disputes.filter((d) => {
+      const dBranch = (d.branch || '').toLowerCase().trim();
+      const dDept = (d.department || '').toLowerCase().trim();
+      return (
+        dBranch === filterLower ||
+        dDept === filterLower ||
+        dBranch.includes(filterLower) ||
+        dDept.includes(filterLower)
+      );
+    });
+
+    if (filtered.length > 0) {
+      listToExport = filtered;
+    }
+  }
 
   if (listToExport.length === 0) {
-    alert(`No matching dispute records found for selected branch: ${branchFilter}`);
+    showErrorAlert('No Matching Records', `No matching dispute records found for export (${branchFilter}).`);
     return;
   }
 
@@ -36,10 +51,24 @@ export function exportDisputesToPdf(
     hour12: true,
   });
 
-  // Open a clean printable print-window
-  const printWindow = window.open('', '_blank');
-  if (!printWindow) {
-    alert('Pop-up blocked! Please allow pop-ups for this domain to download the PDF report.');
+  const existingFrame = document.getElementById('fbc-pdf-print-frame');
+  if (existingFrame) {
+    existingFrame.remove();
+  }
+  const printFrame = document.createElement('iframe');
+  printFrame.id = 'fbc-pdf-print-frame';
+  printFrame.style.position = 'fixed';
+  printFrame.style.right = '0';
+  printFrame.style.bottom = '0';
+  printFrame.style.width = '0';
+  printFrame.style.height = '0';
+  printFrame.style.border = '0';
+  document.body.appendChild(printFrame);
+
+  const printDoc = printFrame.contentWindow?.document;
+  if (!printFrame.contentWindow || !printDoc) {
+    printFrame.remove();
+    showErrorAlert('Export Error', 'Unable to initialize print frame in this browser.');
     return;
   }
 
@@ -82,7 +111,7 @@ export function exportDisputesToPdf(
                   <span class="record-num">#${itemNum}</span>
                   <span class="emp-name">${d.employeeName}</span>
                   <span class="emp-id">(${d.employeeId})</span>
-                  <span class="branch-tag">${d.branch || d.department || 'Main Branch'}</span>
+                  <span class="branch-tag">${d.branch || d.department || 'Branch'}</span>
                 </div>
                 <div class="status-badge" style="background-color: ${statusBg}; color: ${statusColor}; border-color: ${statusColor};">
                   ${d.status}
@@ -104,14 +133,14 @@ export function exportDisputesToPdf(
                 <div class="approvals-grid">
                   <div class="approval-item">
                     <span class="app-title">Branch Manager:</span>
-                    <span class="app-status ${d.managerApproved ? 'text-green' : 'text-amber'}">
+                    <span class="app-status ${d.managerApproved ? 'text-green' : (d.status === 'REJECTED' ? 'text-red' : 'text-amber')}">
                       ${d.managerApproved ? '✓ APPROVED' : (d.status === 'REJECTED' ? '✕ REJECTED' : '⏳ PENDING')}
                     </span>
                     ${d.managerApprovedAt ? `<span class="app-time">(${d.managerApprovedAt})</span>` : ''}
                   </div>
                   <div class="approval-item">
                     <span class="app-title">Payroll Dept:</span>
-                    <span class="app-status ${d.payrollApproved ? 'text-green' : 'text-amber'}">
+                    <span class="app-status ${d.payrollApproved ? 'text-green' : (d.status === 'REJECTED' ? 'text-red' : 'text-amber')}">
                       ${d.payrollApproved ? '✓ APPROVED' : (d.status === 'REJECTED' ? '✕ REJECTED' : '⏳ PENDING')}
                     </span>
                     ${d.payrollApprovedAt ? `<span class="app-time">(${d.payrollApprovedAt})</span>` : ''}
@@ -150,7 +179,8 @@ export function exportDisputesToPdf(
     })
     .join('');
 
-  printWindow.document.write(`
+  printDoc.open();
+  printDoc.write(`
     <!DOCTYPE html>
     <html>
       <head>
@@ -379,6 +409,7 @@ export function exportDisputesToPdf(
             font-weight: 900;
           }
           .text-green { color: #047857; }
+          .text-red { color: #b91c1c; }
           .text-amber { color: #b45309; }
           .app-time {
             font-size: 8.5px;
@@ -408,16 +439,21 @@ export function exportDisputesToPdf(
         </div>
 
         ${pagesHtml}
-
-        <script>
-          window.onload = function() {
-            setTimeout(function() {
-              window.print();
-            }, 500);
-          };
-        </script>
       </body>
     </html>
   `);
-  printWindow.document.close();
+
+  printDoc.close();
+  setTimeout(() => {
+    try {
+      printFrame.contentWindow?.focus();
+      printFrame.contentWindow?.print();
+    } catch (err) {
+      console.log('Focus print fallback:', err);
+    }
+    setTimeout(() => {
+      printFrame.remove();
+    }, 60_000);
+  }, 300);
 }
+
