@@ -286,7 +286,12 @@ export function subscribeCollection<T extends { id: string }>(
     (error) => {
       console.error(`Firestore error on ${collectionName}:`, error);
       const deletedSet = getDeletedIds(collectionName);
-      const cached = localStorage.getItem(storageKey);
+      let cached: string | null = null;
+      try {
+        cached = localStorage.getItem(storageKey);
+      } catch (storageErr) {
+        console.error(`Failed reading fallback cache for ${storageKey}`, storageErr);
+      }
       if (cached) {
         try {
           const parsed = JSON.parse(cached);

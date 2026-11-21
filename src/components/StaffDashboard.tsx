@@ -90,11 +90,15 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   const [requestedIn, setRequestedIn] = useState('08:00:00');
   const [requestedOut, setRequestedOut] = useState('17:00:00');
 
+  // Role guard: STAFF role does not have access to CTO leave requests or balances
+  const canAccessCto = currentUser.role !== 'STAFF';
+
   // Personal Totals Calculations
   const myCtoStats = getUserCtoStats(currentUser.employeeId, mySummaries, ctoRequests, ctoAdjustments);
-  const totalDaysWorked = mySummaries.filter((s) => s.netHoursWorked > 0 || s.firstIn).length;
-  const totalNetHours = mySummaries.reduce((acc, s) => acc + s.netHoursWorked, 0);
-  const totalUndertime = mySummaries.reduce((acc, s) => acc + s.undertimeHours, 0);
+  const totalDaysWorked = mySummaries.filter((s) => (Number(s.netHoursWorked) || 0) > 0 || s.firstIn).length;
+  const totalNetHours = mySummaries.reduce((acc, s) => acc + (Number(s.netHoursWorked) || 0), 0);
+  const totalOvertime = mySummaries.reduce((acc, s) => acc + (Number(s.overtimeHours) || 0), 0);
+  const totalUndertime = mySummaries.reduce((acc, s) => acc + (Number(s.undertimeHours) || 0), 0);
 
   const handleOpenDispute = (s?: AttendanceSummaryDaily) => {
     setSelectedSummaryForDispute(s || null);
@@ -139,22 +143,27 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
 
   // Export Individual Attendance Summary
   const handleExportMySummary = () => {
-    const exportData = mySummaries.map((s) => ({
-      'Employee ID': s.employeeId,
-      'Employee Name': s.employeeName,
-      'Branch': resolveSummaryBranch(s, users, currentUser),
-      'Date': s.date,
-      'Weekday': s.weekday,
-      'Clock In': s.firstIn || 'MISSING',
-      'Clock Out': s.lastOut || 'MISSING',
-      'Break Duration': `${s.totalBreakMinutes} mins`,
-      'Net Hours Worked': s.netHoursWorked,
-      'Flexitime Target': '8.0 hrs',
-      'Undertime (Hrs)': s.undertimeHours,
-      'Potential CTO Eligible (Hrs)': s.ctoHoursEarned || 0,
-      'Status': s.status,
-      'Anomalies / Remarks': s.anomalies.join(' | ') || 'None',
-    }));
+    const exportData = mySummaries.map((s) => {
+      const baseRow: Record<string, string | number> = {
+        'Employee ID': s.employeeId,
+        'Employee Name': s.employeeName,
+        'Branch': resolveSummaryBranch(s, users, currentUser),
+        'Date': s.date,
+        'Weekday': s.weekday,
+        'Clock In': s.firstIn || 'MISSING',
+        'Clock Out': s.lastOut || 'MISSING',
+        'Break Duration': `${s.totalBreakMinutes || 0} mins`,
+        'Net Hours Worked': s.netHoursWorked || 0,
+        'Flexitime Target': '8.0 hrs',
+        'Undertime (Hrs)': s.undertimeHours || 0,
+      };
+      if (canAccessCto) {
+        baseRow['Potential CTO Eligible (Hrs)'] = s.ctoHoursEarned || 0;
+      }
+      baseRow['Status'] = s.status;
+      baseRow['Anomalies / Remarks'] = (s.anomalies || []).join(' | ') || 'None';
+      return baseRow;
+    });
 
     const filename = `${currentUser.employeeId}_Attendance_Summary.xlsx`;
     const ws = XLSX.utils.json_to_sheet(exportData);
@@ -180,7 +189,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
                 />
               ) : (
                 <div className="w-14 h-14 rounded-2xl bg-[#656D4A] text-white flex items-center justify-center font-bold text-xl">
-                  {currentUser.name.substring(0, 2).toUpperCase()}
+                  {(currentUser.name || 'U').substring(0, 2).toUpperCase()}
                 </div>
               )}
               <div>
@@ -215,10 +224,17 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
               <div className="text-xl font-extrabold text-[#2C3524] mt-1">{totalNetHours.toFixed(1)} hrs</div>
             </div>
 
-            <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200">
-              <span className="text-[11px] font-bold text-amber-800 uppercase">Available CTO Balance</span>
-              <div className="text-xl font-extrabold text-amber-950 mt-1">{myCtoStats.availableBalance.toFixed(1)} hrs</div>
-            </div>
+            {canAccessCto ? (
+              <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-200">
+                <span className="text-[11px] font-bold text-amber-800 uppercase">Available CTO Balance</span>
+                <div className="text-xl font-extrabold text-amber-950 mt-1">{myCtoStats.availableBalance.toFixed(1)} hrs</div>
+              </div>
+            ) : (
+              <div className="bg-sky-50 p-3.5 rounded-xl border border-sky-200">
+                <span className="text-[11px] font-bold text-sky-800 uppercase">Overtime Hours</span>
+                <div className="text-xl font-extrabold text-sky-900 mt-1">+{totalOvertime.toFixed(1)} hrs</div>
+              </div>
+            )}
 
             <div className="bg-amber-50 p-3.5 rounded-xl border border-amber-100">
               <span className="text-[11px] font-bold text-amber-700 uppercase">Undertime Deficit</span>
@@ -242,8 +258,8 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
         </div>
       )}
 
-      {/* COMPENSATORY TIME OFF (CTO LEAVE REQUESTS & BALANCES) */}
-      {(activeTab === 'my-cto' || activeTab === 'all') && (
+      {/* COMPENSATORY TIME OFF (CTO LEAVE REQUESTS & BALANCES) - Restricted from STAFF */}
+      {canAccessCto && (activeTab === 'my-cto' || activeTab === 'all') && (
         <CtoLeaveDashboard
           currentUser={currentUser}
           summaries={summaries}

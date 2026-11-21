@@ -109,8 +109,8 @@ export function exportDisputesToPdf(
               <div class="card-header">
                 <div class="card-header-left">
                   <span class="record-num">#${itemNum}</span>
-                  <span class="emp-name">${d.employeeName}</span>
-                  <span class="emp-id">(${d.employeeId})</span>
+                  <span class="emp-name">${d.employeeName || 'Staff'}</span>
+                  <span class="emp-id">(${d.employeeId || 'N/A'})</span>
                   <span class="branch-tag">${d.branch || d.department || 'Branch'}</span>
                 </div>
                 <div class="status-badge" style="background-color: ${statusBg}; color: ${statusColor}; border-color: ${statusColor};">
@@ -120,7 +120,7 @@ export function exportDisputesToPdf(
 
               <div class="card-body">
                 <div class="meta-row">
-                  <div><strong>Date of Adjustment:</strong> ${d.date}</div>
+                  <div><strong>Date of Adjustment:</strong> ${d.date || (d as any).targetDate || 'N/A'}</div>
                   <div><strong>Category:</strong> ${(d.category || d.type || 'Time Adjustment').replace(/_/g, ' ')}</div>
                   <div><strong>Requested Adjustment:</strong> <span class="time-highlight">${timeDetailText}</span></div>
                 </div>
@@ -414,7 +414,7 @@ export function exportDisputesToPdf(
           .app-time {
             font-size: 8.5px;
             color: #71717a;
-            font-mono: true;
+            font-family: monospace;
           }
           .page-footer {
             border-top: 1px solid #09090b;

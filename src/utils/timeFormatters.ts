@@ -354,7 +354,7 @@ export function normalizeLackingStatus(summary: AttendanceSummaryDaily): Attenda
     return {
       ...summary,
       status: 'LACKING',
-      anomalies: summary.anomalies.length > 0 ? summary.anomalies : [lackingDesc],
+      anomalies: Array.isArray(summary.anomalies) && summary.anomalies.length > 0 ? summary.anomalies : [lackingDesc],
     };
   }
   return summary;

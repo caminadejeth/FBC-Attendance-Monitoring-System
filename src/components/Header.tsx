@@ -91,7 +91,9 @@ export const Header: React.FC<HeaderProps> = ({
 
   const filteredAlerts = useMemo(() => {
     if (filter === 'WAREHOUSE') {
-      return adminAlerts.filter((a) => a.category === 'STR' || a.category === 'LOW_STOCK');
+      return adminAlerts.filter(
+        (a) => a.category === 'STR' || a.category === 'LOW_STOCK' || a.category === 'NEAR_EXPIRY'
+      );
     }
     if (filter === 'DISPUTE') {
       return adminAlerts.filter((a) => a.category === 'DISPUTE');
@@ -152,6 +154,7 @@ export const Header: React.FC<HeaderProps> = ({
 
     let Icon = AlertTriangle;
     if (alert.category === 'STR' || alert.category === 'LOW_STOCK') Icon = Package;
+    else if (alert.category === 'NEAR_EXPIRY') Icon = CalendarClock;
     else if (alert.category === 'DISPUTE') Icon = Clock;
     else if (alert.category === 'CTO') Icon = CalendarClock;
 
@@ -290,7 +293,10 @@ export const Header: React.FC<HeaderProps> = ({
                             id: 'WAREHOUSE',
                             label: `STR & Stock (${
                               adminAlerts.filter(
-                                (a) => a.category === 'STR' || a.category === 'LOW_STOCK'
+                                (a) =>
+                                  a.category === 'STR' ||
+                                  a.category === 'LOW_STOCK' ||
+                                  a.category === 'NEAR_EXPIRY'
                               ).length
                             })`,
                           },
@@ -336,7 +342,7 @@ export const Header: React.FC<HeaderProps> = ({
                             All clear in this category
                           </p>
                           <p className="text-[11px] text-zinc-500">
-                            New STR reviews, low-stock warnings, and pending disputes will appear here automatically.
+                            New STR reviews, low-stock & near-expiry warnings, and pending disputes will appear here automatically.
                           </p>
                         </div>
                       ) : (
@@ -454,7 +460,7 @@ export const Header: React.FC<HeaderProps> = ({
                 />
               ) : (
                 <div className="w-8 h-8 rounded-full bg-amber-400 text-zinc-950 flex items-center justify-center font-black text-xs">
-                  {currentUser.name.substring(0, 2).toUpperCase()}
+                  {(currentUser.name || 'U').substring(0, 2).toUpperCase()}
                 </div>
               )}
               <div className="hidden lg:block text-left">

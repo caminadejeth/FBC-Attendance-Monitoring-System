@@ -243,7 +243,7 @@ export const CtoLeaveDashboard: React.FC<CtoLeaveDashboardProps> = ({
                         )}
                         <span className="font-extrabold text-xs text-[#2C3524]">{req.date}</span>
                         <span className="font-mono font-black text-xs text-zinc-900 bg-zinc-100 px-2 py-0.5 rounded">
-                          {req.hoursRequested.toFixed(1)}h
+                          {(Number(req.hoursRequested) || 0).toFixed(1)}h
                         </span>
                       </div>
                       <div className="shrink-0">
@@ -317,7 +317,7 @@ export const CtoLeaveDashboard: React.FC<CtoLeaveDashboardProps> = ({
                           )}
                         </td>
                         <td className="p-2.5 text-center font-mono font-bold text-sm">
-                          {req.hoursRequested.toFixed(1)}h
+                          {(Number(req.hoursRequested) || 0).toFixed(1)}h
                         </td>
                         <td className="p-2.5 text-gray-700 max-w-[200px] truncate" title={req.reason}>
                           {req.reason}

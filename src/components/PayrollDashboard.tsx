@@ -172,7 +172,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
     const existingDispute = disputes.find(
       (d) => d.employeeId === s.employeeId && d.targetDate === s.date
     );
-    const existingRemark = existingDispute?.reason || (s.anomalies.length > 0 ? s.anomalies.join(' | ') : '');
+    const existingRemark = existingDispute?.reason || ((s.anomalies || []).length > 0 ? (s.anomalies || []).join(' | ') : '');
 
     const result = await showRemarkPromptAlert(
       s.employeeName,
@@ -315,9 +315,10 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
       resolvedBranch === selectedDept ||
       empUser?.department === selectedDept ||
       s.department === selectedDept;
+    const q = searchTerm.toLowerCase();
     const matchesSearch =
-      s.employeeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.employeeId.toLowerCase().includes(searchTerm.toLowerCase());
+      (s.employeeName || '').toLowerCase().includes(q) ||
+      (s.employeeId || '').toLowerCase().includes(q);
     return inDept && matchesSearch;
   });
 
@@ -485,7 +486,7 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
 
       {/* ATTENDANCE & TIME ADJUSTMENT KPI OVERVIEW */}
       {(activeTab === 'dtr-logs' || activeTab === 'daily-logs' || activeTab === 'overview' || activeTab === 'dashboard' || activeTab === 'all') && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className={`grid grid-cols-1 sm:grid-cols-3 gap-4 ${activeTab === 'dtr-logs' ? 'print:hidden no-print' : ''}`}>
           <div className="bg-white p-5 rounded-2xl border border-[#D3D8C8] shadow-xs flex items-center justify-between">
             <div>
               <span className="text-xs font-bold text-amber-700 uppercase tracking-wider flex items-center gap-1.5">
@@ -747,19 +748,19 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                       <div className="grid grid-cols-4 gap-1 text-center text-[11px] font-mono bg-gray-50 rounded-lg p-1.5 border border-gray-200">
                         <div>
                           <span className="block text-[9px] font-sans text-gray-500 uppercase">Break</span>
-                          <span className="font-bold text-gray-700">{s.totalBreakMinutes}m</span>
+                          <span className="font-bold text-gray-700">{s.totalBreakMinutes || 0}m</span>
                         </div>
                         <div>
                           <span className="block text-[9px] font-sans text-gray-500 uppercase">Gross</span>
-                          <span className="font-bold text-gray-700">{grossHours.toFixed(1)}h</span>
+                          <span className="font-bold text-gray-700">{(Number(grossHours) || 0).toFixed(1)}h</span>
                         </div>
                         <div>
                           <span className="block text-[9px] font-sans text-gray-500 uppercase">Worked</span>
-                          <span className="font-extrabold text-[#2C3524]">{s.netHoursWorked.toFixed(1)}h</span>
+                          <span className="font-extrabold text-[#2C3524]">{(Number(s.netHoursWorked) || 0).toFixed(1)}h</span>
                         </div>
                         <div>
                           <span className="block text-[9px] font-sans text-gray-500 uppercase">OT</span>
-                          <span className="font-bold text-sky-700">{s.overtimeHours > 0 ? `+${s.overtimeHours.toFixed(1)}h` : '0.0h'}</span>
+                          <span className="font-bold text-sky-700">{(Number(s.overtimeHours) || 0) > 0 ? `+${(Number(s.overtimeHours) || 0).toFixed(1)}h` : '0.0h'}</span>
                         </div>
                       </div>
 
@@ -773,8 +774,8 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                             <span className="inline-block px-2 py-0.5 rounded-md font-extrabold bg-amber-100 text-amber-950 border border-amber-300">
                               ⚡ Missing {missingPunches.join(', ')}
                             </span>
-                          ) : s.anomalies.length > 0 ? (
-                            <span className="text-gray-600">{s.anomalies.join('; ')}</span>
+                          ) : (s.anomalies || []).length > 0 ? (
+                            <span className="text-gray-600">{(s.anomalies || []).join('; ')}</span>
                           ) : (
                             <span className="text-gray-400 italic">No concerns</span>
                           )}
@@ -926,19 +927,19 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                             )}
                           </td>
                           <td className="px-2.5 py-2 text-center font-mono text-gray-600 text-[11px]">
-                            {s.totalBreakMinutes}m
+                            {s.totalBreakMinutes || 0}m
                           </td>
                           <td className="px-2.5 py-2 text-center font-mono text-gray-600 text-[11px]">
-                            {(s.totalBreakMinutes / 60).toFixed(1)}h
+                            {((Number(s.totalBreakMinutes) || 0) / 60).toFixed(1)}h
                           </td>
                           <td className="px-2.5 py-2 text-center font-mono font-bold text-gray-700 text-[11px]">
-                            {grossHours.toFixed(1)} hrs
+                            {(Number(grossHours) || 0).toFixed(1)} hrs
                           </td>
                           <td className="px-2.5 py-2 text-center font-mono font-bold text-[#2C3524] text-[11px]">
-                            {s.netHoursWorked.toFixed(1)} hrs
+                            {(Number(s.netHoursWorked) || 0).toFixed(1)} hrs
                           </td>
                           <td className="px-2.5 py-2 text-center font-mono font-bold text-sky-700 text-[11px]">
-                            {s.overtimeHours > 0 ? `+${s.overtimeHours.toFixed(1)}h` : '0.0h'}
+                            {(Number(s.overtimeHours) || 0) > 0 ? `+${(Number(s.overtimeHours) || 0).toFixed(1)}h` : '0.0h'}
                           </td>
                           <td className="px-2.5 py-2 text-[11px] text-gray-700 min-w-[180px]">
                             <div className="flex flex-col gap-1 items-start">
@@ -958,8 +959,8 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
                                 <span className="px-2 py-0.5 rounded-md font-extrabold text-[10px] bg-amber-100 text-amber-950 border border-amber-300">
                                   ⚡ Missing {missingPunches.join(', ')}
                                 </span>
-                              ) : s.anomalies.length > 0 ? (
-                                <span className="text-gray-600 text-[10px]">{s.anomalies.join('; ')}</span>
+                              ) : (s.anomalies || []).length > 0 ? (
+                                <span className="text-gray-600 text-[10px]">{(s.anomalies || []).join('; ')}</span>
                               ) : (
                                 <span className="text-gray-400 text-[10px] italic">No concerns</span>
                               )}
@@ -1456,11 +1457,12 @@ export const PayrollDashboard: React.FC<PayrollDashboardProps> = ({
       {/* BRANCH TIME ADJUSTMENTS & DISPUTES SECTION FOR PAYROLL & ADMIN */}
       {(activeTab === 'disputes' || activeTab === 'all') && (() => {
         const filteredList = disputes.filter((d) => {
+          const q = disputeSearch.toLowerCase();
           const matchSearch =
             !disputeSearch ||
-            d.employeeName.toLowerCase().includes(disputeSearch.toLowerCase()) ||
-            d.employeeId.toLowerCase().includes(disputeSearch.toLowerCase()) ||
-            d.reason.toLowerCase().includes(disputeSearch.toLowerCase());
+            (d.employeeName || '').toLowerCase().includes(q) ||
+            (d.employeeId || '').toLowerCase().includes(q) ||
+            (d.reason || '').toLowerCase().includes(q);
 
           const matchStatus =
             disputeStatusFilter === 'ALL' || d.status === disputeStatusFilter;

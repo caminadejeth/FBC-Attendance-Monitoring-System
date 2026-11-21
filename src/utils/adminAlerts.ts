@@ -5,9 +5,19 @@ import {
   StockTransferRequisition,
   WarehouseInventoryItem,
 } from '../types';
-import { isMonitoredWarehouseBranch } from '../data/warehouseData';
+import {
+  evaluateItemExpiry,
+  isMonitoredWarehouseBranch,
+  NEAR_EXPIRY_THRESHOLD_DAYS,
+} from '../data/warehouseData';
 
-export type AdminAlertCategory = 'STR' | 'LOW_STOCK' | 'DISPUTE' | 'CTO' | 'ATTENDANCE';
+export type AdminAlertCategory =
+  | 'STR'
+  | 'LOW_STOCK'
+  | 'NEAR_EXPIRY'
+  | 'DISPUTE'
+  | 'CTO'
+  | 'ATTENDANCE';
 export type AdminAlertSeverity = 'critical' | 'warning' | 'info';
 
 export interface AdminAlertItem {
@@ -123,6 +133,61 @@ export function buildAdminAlerts({
       timestamp: latestUpdate || new Date().toISOString(),
       targetTab: 'warehouse-inventory',
       actionLabel: 'Check Stock',
+    });
+  });
+
+  // 2b. Near-Expiry & Expired Warehouse Inventory across the 6 Monitored Branches
+  const nearExpiryWithEval = (warehouseItems || [])
+    .filter((item) => item && isMonitoredWarehouseBranch(item.branchCode))
+    .map((item) => ({ item, expiry: evaluateItemExpiry(item) }))
+    .filter(({ expiry }) => expiry.isAlertActive);
+
+  const expiryByBranch = new Map<
+    string,
+    Array<{ item: WarehouseInventoryItem; expiry: ReturnType<typeof evaluateItemExpiry> }>
+  >();
+  for (const entry of nearExpiryWithEval) {
+    const key = entry.item.branchCode;
+    const list = expiryByBranch.get(key) || [];
+    list.push(entry);
+    expiryByBranch.set(key, list);
+  }
+
+  expiryByBranch.forEach((branchEntries, branchCode) => {
+    const sorted = [...branchEntries].sort(
+      (a, b) => (a.expiry.daysUntil ?? 9999) - (b.expiry.daysUntil ?? 9999)
+    );
+    const expiredCount = sorted.filter((e) => e.expiry.status === 'EXPIRED').length;
+    const urgentCount = sorted.filter(
+      (e) => e.expiry.daysUntil !== null && e.expiry.daysUntil <= 7
+    ).length;
+    const branchName = sorted[0]?.item.branchName || branchCode;
+    const previewNames = sorted
+      .slice(0, 3)
+      .map((e) => `${e.item.description} (${e.expiry.label})`)
+      .join(', ');
+    const remaining = sorted.length > 3 ? ` +${sorted.length - 3} more` : '';
+    const latestUpdate = sorted.reduce((latest, cur) => {
+      return toMillis(cur.item.updatedAt) > toMillis(latest)
+        ? cur.item.updatedAt
+        : latest;
+    }, sorted[0]?.item.updatedAt || '');
+
+    alerts.push({
+      id: `near-expiry-${branchCode}-${sorted.length}-${expiredCount}-${sorted[0]?.item.id || 'none'}`,
+      category: 'NEAR_EXPIRY',
+      severity: expiredCount > 0 || urgentCount > 0 ? 'critical' : 'warning',
+      title:
+        expiredCount > 0
+          ? `Expired / Expiring Stock · ${branchName}`
+          : `Near-Expiry Stock Alert · ${branchName}`,
+      description: `${previewNames}${remaining}`,
+      meta: `${sorted.length} SKU${sorted.length === 1 ? '' : 's'} expiring ≤${NEAR_EXPIRY_THRESHOLD_DAYS}d${
+        expiredCount > 0 ? ` · ${expiredCount} expired` : ''
+      }`,
+      timestamp: latestUpdate || new Date().toISOString(),
+      targetTab: 'warehouse-inventory',
+      actionLabel: 'Check Expiry',
     });
   });
 

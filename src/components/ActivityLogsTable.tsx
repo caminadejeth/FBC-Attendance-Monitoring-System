@@ -24,16 +24,18 @@ export const ActivityLogsTable: React.FC<ActivityLogsTableProps> = ({
   const [logCategoryFilter, setLogCategoryFilter] = useState('ALL');
 
   const filteredLogs = activityLogs.filter((log) => {
+    const q = logSearchQuery.toLowerCase();
     const matchesSearch =
-      log.details.toLowerCase().includes(logSearchQuery.toLowerCase()) ||
-      log.userName.toLowerCase().includes(logSearchQuery.toLowerCase()) ||
-      log.actionCategory.toLowerCase().includes(logSearchQuery.toLowerCase()) ||
-      log.actionType.toLowerCase().includes(logSearchQuery.toLowerCase());
+      (log.details || '').toLowerCase().includes(q) ||
+      (log.userName || '').toLowerCase().includes(q) ||
+      (log.actionCategory || '').toLowerCase().includes(q) ||
+      (log.actionType || '').toLowerCase().includes(q);
 
+    const catFilter = logCategoryFilter.toUpperCase();
     const matchesCategory =
       logCategoryFilter === 'ALL' ||
-      logCategoryFilter.toUpperCase() === log.actionCategory.toUpperCase() ||
-      logCategoryFilter.toUpperCase() === log.actionType.toUpperCase();
+      catFilter === (log.actionCategory || '').toUpperCase() ||
+      catFilter === (log.actionType || '').toUpperCase();
 
     return matchesSearch && matchesCategory;
   });

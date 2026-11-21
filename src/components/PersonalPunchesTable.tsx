@@ -57,6 +57,8 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
   onUpdateSummaryAnomaly,
   onSubmitDispute,
 }) => {
+  const canAccessCto = currentUser.role !== 'STAFF';
+
   // Personal summaries for this user
   const mySummaries = summaries.filter((s) => s.employeeId === currentUser.employeeId);
   const myCtoRequests = ctoRequests.filter((r) => r.employeeId === currentUser.employeeId);
@@ -132,6 +134,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
   // Submit CTO Request (Credit or Leave)
   const handleFormSubmitCto = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canAccessCto) return;
     if (!ctoReason.trim()) {
       showErrorAlert('Missing Reason', `Please enter a reason for your CTO ${ctoRequestType === 'CREDIT' ? 'credit' : 'leave'} request.`);
       return;
@@ -168,6 +171,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
   };
 
   const handleOpenCreditModal = (s?: AttendanceSummaryDaily) => {
+    if (!canAccessCto) return;
     setCtoRequestType('CREDIT');
     if (s) {
       setCtoDate(s.date);
@@ -191,11 +195,11 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
       'Break-Out': s.breakOut || '--',
       'Break-In': s.breakIn || '--',
       'Time-Out': s.lastOut || '--',
-      'Worked Hours': s.netHoursWorked.toFixed(1),
-      OT: (s.overtimeHours || 0).toFixed(1),
-      CTO: (s.ctoHoursEarned || 0).toFixed(1),
+      'Worked Hours': (Number(s.netHoursWorked) || 0).toFixed(1),
+      OT: (Number(s.overtimeHours) || 0).toFixed(1),
+      ...(canAccessCto ? { CTO: (Number(s.ctoHoursEarned) || 0).toFixed(1) } : {}),
       Status: s.status,
-      Remarks: s.anomalies.join(' | ') || 'Normal Shift',
+      Remarks: (s.anomalies || []).join(' | ') || 'Normal Shift',
     }));
 
     const filename = `${currentUser.employeeId}_Personal_Punches_${new Date().toISOString().split('T')[0]}.xlsx`;
@@ -209,98 +213,134 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* CTO Balance Banner & Action Header */}
-      <div className="bg-gradient-to-r from-zinc-900 via-zinc-950 to-zinc-900 rounded-2xl border-2 border-zinc-950 p-5 sm:p-6 text-white shadow-xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-amber-400/10 rounded-full blur-3xl pointer-events-none" />
-        
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center relative z-10">
-          {/* Left: Balance Card */}
-          <div className="lg:col-span-7 space-y-3">
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-400 text-zinc-950">
-                Compensatory Time Off (CTO)
-              </span>
-              <span className="text-xs text-zinc-400 font-mono">ID: {currentUser.employeeId}</span>
-            </div>
-
-            <div className="flex items-baseline gap-3">
-              <h3 className="text-3xl sm:text-4xl font-black tracking-tight text-amber-400 font-mono">
-                {ctoStats.availableBalance.toFixed(1)}{' '}
-                <span className="text-lg font-bold text-zinc-300 font-sans">hrs</span>
-              </h3>
-              <p className="text-xs text-zinc-300 font-medium">Available CTO Balance</p>
-            </div>
-
-            <p className="text-xs text-zinc-400 leading-relaxed max-w-xl">
-              All staff time beyond <strong className="text-amber-300">10 net worked hours</strong> (with 1.0 hr automatic break deduction) is subject to CTO. Submit a <strong className="text-amber-300">Request CTO Credit</strong> with reason for Payroll approval before hours are added to your balance.
-            </p>
-
-            {/* Breakdown stats */}
-            <div className="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-800 text-xs">
-              <div>
-                <span className="text-zinc-500 block text-[10px] font-semibold uppercase">Approved CTO Credits</span>
-                <span className="font-bold font-mono text-emerald-400">+{ctoStats.creditedApproved.toFixed(1)} hrs</span>
-              </div>
-              <div>
-                <span className="text-zinc-500 block text-[10px] font-semibold uppercase">Payroll Adjustments</span>
-                <span className={`font-bold font-mono ${ctoStats.manualAdjustments >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {ctoStats.manualAdjustments >= 0 ? `+${ctoStats.manualAdjustments.toFixed(1)}` : ctoStats.manualAdjustments.toFixed(1)} hrs
+      {/* CTO Balance Banner & Action Header (CTO hidden for STAFF) */}
+      {canAccessCto ? (
+        <div className="bg-gradient-to-r from-zinc-900 via-zinc-950 to-zinc-900 rounded-2xl border-2 border-zinc-950 p-5 sm:p-6 text-white shadow-xl relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-amber-400/10 rounded-full blur-3xl pointer-events-none" />
+          
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center relative z-10">
+            {/* Left: Balance Card */}
+            <div className="lg:col-span-7 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-400 text-zinc-950">
+                  Compensatory Time Off (CTO)
                 </span>
+                <span className="text-xs text-zinc-400 font-mono">ID: {currentUser.employeeId}</span>
               </div>
-              <div>
-                <span className="text-zinc-500 block text-[10px] font-semibold uppercase">Used / Approved Leaves</span>
-                <span className="font-bold font-mono text-amber-300">-{ctoStats.usedApproved.toFixed(1)} hrs</span>
+
+              <div className="flex items-baseline gap-3">
+                <h3 className="text-3xl sm:text-4xl font-black tracking-tight text-amber-400 font-mono">
+                  {ctoStats.availableBalance.toFixed(1)}{' '}
+                  <span className="text-lg font-bold text-zinc-300 font-sans">hrs</span>
+                </h3>
+                <p className="text-xs text-zinc-300 font-medium">Available CTO Balance</p>
               </div>
+
+              <p className="text-xs text-zinc-400 leading-relaxed max-w-xl">
+                All staff time beyond <strong className="text-amber-300">10 net worked hours</strong> (with 1.0 hr automatic break deduction) is subject to CTO. Submit a <strong className="text-amber-300">Request CTO Credit</strong> with reason for Payroll approval before hours are added to your balance.
+              </p>
+
+              {/* Breakdown stats */}
+              <div className="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-800 text-xs">
+                <div>
+                  <span className="text-zinc-500 block text-[10px] font-semibold uppercase">Approved CTO Credits</span>
+                  <span className="font-bold font-mono text-emerald-400">+{ctoStats.creditedApproved.toFixed(1)} hrs</span>
+                </div>
+                <div>
+                  <span className="text-zinc-500 block text-[10px] font-semibold uppercase">Payroll Adjustments</span>
+                  <span className={`font-bold font-mono ${ctoStats.manualAdjustments >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {ctoStats.manualAdjustments >= 0 ? `+${ctoStats.manualAdjustments.toFixed(1)}` : ctoStats.manualAdjustments.toFixed(1)} hrs
+                  </span>
+                </div>
+                <div>
+                  <span className="text-zinc-500 block text-[10px] font-semibold uppercase">Used / Approved Leaves</span>
+                  <span className="font-bold font-mono text-amber-300">-{ctoStats.usedApproved.toFixed(1)} hrs</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Actions */}
+            <div className="lg:col-span-5 flex flex-col sm:flex-row lg:flex-col gap-2 justify-center items-stretch border-t lg:border-t-0 lg:border-l border-zinc-800 pt-4 lg:pt-0 lg:pl-6">
+              <button
+                id="btn-request-cto-credit"
+                onClick={() => handleOpenCreditModal()}
+                className="flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-black text-xs uppercase tracking-wider py-2.5 px-4 rounded-xl border border-zinc-950 shadow-md transition-all cursor-pointer active:scale-95"
+              >
+                <Sparkles className="w-4 h-4 text-zinc-950" /> Request CTO Credit
+              </button>
+
+              <button
+                id="btn-file-cto-leave"
+                onClick={() => {
+                  setCtoRequestType('LEAVE');
+                  setCtoHours(8.0);
+                  setCtoDate(new Date().toISOString().split('T')[0]);
+                  setCtoReason('');
+                  setShowCtoModal(true);
+                }}
+                className="flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider py-2 px-4 rounded-xl border border-zinc-950 transition-all cursor-pointer"
+              >
+                <PlusCircle className="w-3.5 h-3.5" /> File CTO Leave Request
+              </button>
+
+              {onSubmitDispute && (
+                <button
+                  id="btn-file-time-adjustment-personal"
+                  onClick={() => {
+                    setSelectedSummaryForDispute(null);
+                    setShowDisputeModal(true);
+                  }}
+                  className="flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold text-xs py-2 px-4 rounded-xl border border-zinc-700 transition-all cursor-pointer"
+                >
+                  <PlusCircle className="w-3.5 h-3.5" /> File Time Adjustment
+                </button>
+              )}
+
+              <button
+                id="btn-export-personal-punches"
+                onClick={handleExportPersonalLogs}
+                className="flex items-center justify-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 font-bold text-[11px] py-1.5 px-4 rounded-xl border border-zinc-800 transition-all cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" /> Export Excel Log
+              </button>
             </div>
           </div>
-
-          {/* Right: Actions */}
-          <div className="lg:col-span-5 flex flex-col sm:flex-row lg:flex-col gap-2 justify-center items-stretch border-t lg:border-t-0 lg:border-l border-zinc-800 pt-4 lg:pt-0 lg:pl-6">
-            <button
-              id="btn-request-cto-credit"
-              onClick={() => handleOpenCreditModal()}
-              className="flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-black text-xs uppercase tracking-wider py-2.5 px-4 rounded-xl border border-zinc-950 shadow-md transition-all cursor-pointer active:scale-95"
-            >
-              <Sparkles className="w-4 h-4 text-zinc-950" /> Request CTO Credit
-            </button>
-
-            <button
-              id="btn-file-cto-leave"
-              onClick={() => {
-                setCtoRequestType('LEAVE');
-                setCtoHours(8.0);
-                setCtoDate(new Date().toISOString().split('T')[0]);
-                setCtoReason('');
-                setShowCtoModal(true);
-              }}
-              className="flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider py-2 px-4 rounded-xl border border-zinc-950 transition-all cursor-pointer"
-            >
-              <PlusCircle className="w-3.5 h-3.5" /> File CTO Leave Request
-            </button>
-
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl border border-[#D3D8C8] p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black uppercase tracking-tight text-[#2C3524]">
+              Daily Attendance & Punch Actions
+            </h3>
+            <p className="text-xs text-gray-500">
+              Review your biometric punches, file missing punch adjustments, or export your log.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             {onSubmitDispute && (
               <button
                 id="btn-file-time-adjustment-personal"
+                type="button"
                 onClick={() => {
                   setSelectedSummaryForDispute(null);
                   setShowDisputeModal(true);
                 }}
-                className="flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold text-xs py-2 px-4 rounded-xl border border-zinc-700 transition-all cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-2xs transition-all cursor-pointer"
               >
                 <PlusCircle className="w-3.5 h-3.5" /> File Time Adjustment
               </button>
             )}
-
             <button
               id="btn-export-personal-punches"
+              type="button"
               onClick={handleExportPersonalLogs}
-              className="flex items-center justify-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 font-bold text-[11px] py-1.5 px-4 rounded-xl border border-zinc-800 transition-all cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white font-bold text-xs transition-all cursor-pointer"
             >
-              <Download className="w-3.5 h-3.5" /> Export Excel Log
+              <Download className="w-3.5 h-3.5 text-amber-400" /> Export Excel Log
             </button>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Main Personal Attendance Log Table */}
       <div className="bg-white rounded-2xl border-2 border-zinc-950 overflow-hidden shadow-xl">
@@ -409,17 +449,17 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
 
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                       <span className="text-zinc-600 text-[11px] font-medium">
-                        {s.anomalies.length > 0 ? s.anomalies.join(' | ') : 'Normal Shift'}
+                        {(s.anomalies || []).length > 0 ? (s.anomalies || []).join(' | ') : 'Normal Shift'}
                       </span>
                       <div className="flex flex-wrap items-center gap-1.5 ml-auto">
-                        {hasCto && (
+                        {canAccessCto && hasCto && (
                           <button
                             type="button"
                             onClick={() => handleOpenCreditModal(s)}
                             className="inline-flex items-center gap-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-950 px-2 py-1 rounded-full border border-emerald-300 text-[10px] font-black whitespace-nowrap cursor-pointer"
                           >
                             <Sparkles className="w-3 h-3 text-emerald-600" />
-                            +{(s.ctoHoursEarned || 0).toFixed(1)}h CTO
+                            +{(Number(s.ctoHoursEarned) || 0).toFixed(1)}h CTO
                           </button>
                         )}
                         {onSubmitDispute && (
@@ -440,7 +480,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                             const res = await showRemarkPromptAlert(
                               s.employeeName || currentUser.name,
                               formatDateWithDay(s.date, s.weekday),
-                              s.anomalies.join(' | ')
+                              (s.anomalies || []).join(' | ')
                             );
                             if (res.isConfirmed && res.value !== undefined) {
                               if (onUpdateSummaryAnomaly) {
@@ -458,12 +498,14 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                   </div>
                 );
               })}
-              <div className="p-3.5 bg-zinc-950 text-white flex items-center justify-between text-xs font-black uppercase">
-                <span>Total Potential CTO Eligible:</span>
-                <span className="font-mono text-emerald-400 tabular-nums">
-                  +{totalCtoFiltered.toFixed(1)} hrs
-                </span>
-              </div>
+              {canAccessCto && (
+                <div className="p-3.5 bg-zinc-950 text-white flex items-center justify-between text-xs font-black uppercase">
+                  <span>Total Potential CTO Eligible:</span>
+                  <span className="font-mono text-emerald-400 tabular-nums">
+                    +{totalCtoFiltered.toFixed(1)} hrs
+                  </span>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -479,14 +521,16 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                 <th className="py-3 px-4 border-r border-zinc-950/20">Break-In</th>
                 <th className="py-3 px-4 border-r border-zinc-950/20">Time-Out</th>
                 <th className="py-3 px-4 border-r border-zinc-950/20 text-center">Status</th>
-                <th className="py-3 px-4 border-r border-zinc-950/20 text-center">CTO Eligible</th>
+                {canAccessCto && (
+                  <th className="py-3 px-4 border-r border-zinc-950/20 text-center">CTO Eligible</th>
+                )}
                 <th className="py-3 px-4 text-center">Anomalies / Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-200 font-medium text-zinc-800">
               {filteredSummaries.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-zinc-500 bg-zinc-50">
+                  <td colSpan={canAccessCto ? 9 : 8} className="py-12 text-center text-zinc-500 bg-zinc-50">
                     <p className="font-extrabold text-sm text-zinc-700">No attendance logs found for selected date range.</p>
                     <p className="text-xs mt-1 text-zinc-500">Try adjusting your date filters or upload recent ZKTeco biometric exports.</p>
                   </td>
@@ -622,26 +666,28 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                       </td>
 
                       {/* CTO Eligible */}
-                      <td className="py-3 px-4 text-center whitespace-nowrap font-mono font-bold">
-                        {hasCto ? (
-                          <button
-                            onClick={() => handleOpenCreditModal(s)}
-                            className="inline-flex items-center gap-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-950 px-2.5 py-1 rounded-full border border-emerald-300 text-[11px] font-black shadow-2xs transition-colors cursor-pointer"
-                            title="Click to request CTO credit approval"
-                          >
-                            <Sparkles className="w-3 h-3 text-emerald-600" />
-                            +{(s.ctoHoursEarned || 0).toFixed(1)} h Credit
-                          </button>
-                        ) : (
-                          <span className="text-zinc-400 font-normal">--</span>
-                        )}
-                      </td>
+                      {canAccessCto && (
+                        <td className="py-3 px-4 text-center whitespace-nowrap font-mono font-bold">
+                          {hasCto ? (
+                            <button
+                              onClick={() => handleOpenCreditModal(s)}
+                              className="inline-flex items-center gap-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-950 px-2.5 py-1 rounded-full border border-emerald-300 text-[11px] font-black shadow-2xs transition-colors cursor-pointer"
+                              title="Click to request CTO credit approval"
+                            >
+                              <Sparkles className="w-3 h-3 text-emerald-600" />
+                              +{(s.ctoHoursEarned || 0).toFixed(1)} h Credit
+                            </button>
+                          ) : (
+                            <span className="text-zinc-400 font-normal">--</span>
+                          )}
+                        </td>
+                      )}
 
                       {/* Anomalies / Notes */}
                       <td className="py-3 px-4 text-xs font-medium">
                         <div className="flex items-center justify-between gap-2 min-w-[200px]">
-                          <span className="text-zinc-700 text-[11px] font-semibold" title={s.anomalies.length > 0 ? s.anomalies.join(' | ') : 'Normal Shift'}>
-                            {s.anomalies.length > 0 ? s.anomalies.join(' | ') : 'Normal Shift'}
+                          <span className="text-zinc-700 text-[11px] font-semibold" title={(s.anomalies || []).length > 0 ? (s.anomalies || []).join(' | ') : 'Normal Shift'}>
+                            {(s.anomalies || []).length > 0 ? (s.anomalies || []).join(' | ') : 'Normal Shift'}
                           </span>
                           <div className="flex items-center gap-1.5 shrink-0">
                             {onSubmitDispute && (
@@ -663,7 +709,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                                 const res = await showRemarkPromptAlert(
                                   s.employeeName || currentUser.name,
                                   formatDateWithDay(s.date, s.weekday),
-                                  s.anomalies.join(' | ')
+                                  (s.anomalies || []).join(' | ')
                                 );
                                 if (res.isConfirmed && res.value !== undefined) {
                                   if (onUpdateSummaryAnomaly) {
@@ -686,7 +732,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                 })
               )}
             </tbody>
-            {filteredSummaries.length > 0 && (
+            {canAccessCto && filteredSummaries.length > 0 && (
               <tfoot>
                 <tr className="bg-zinc-950 text-white font-black uppercase text-xs border-t-2 border-zinc-950">
                   <td colSpan={7} className="py-3 px-4 text-right tracking-wider">
@@ -704,6 +750,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
       </div>
 
       {/* CTO Request Status List */}
+      {canAccessCto && (
       <div className="bg-white rounded-2xl border-2 border-zinc-950 p-5 shadow-lg space-y-4">
         <div className="flex items-center justify-between border-b border-zinc-200 pb-3">
           <div className="flex items-center gap-2">
@@ -739,7 +786,7 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
                     )}
                     <span className="font-extrabold text-xs text-zinc-950">{req.date}</span>
                     <span className="bg-zinc-200 text-zinc-900 font-mono font-bold text-[10px] px-2 py-0.5 rounded-full">
-                      {req.hoursRequested.toFixed(1)} hrs
+                      {(Number(req.hoursRequested) || 0).toFixed(1)} hrs
                     </span>
                   </div>
                   <p className="text-xs text-zinc-700">{req.reason}</p>
@@ -768,9 +815,10 @@ export const PersonalPunchesTable: React.FC<PersonalPunchesTableProps> = ({
           </div>
         )}
       </div>
+      )}
 
       {/* CTO Request Modal (Credit / Leave) */}
-      {showCtoModal && (
+      {showCtoModal && canAccessCto && (
         <div className="fixed inset-0 z-50 bg-zinc-950/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl border-2 border-zinc-950 max-w-md w-full p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between border-b border-zinc-200 pb-3">

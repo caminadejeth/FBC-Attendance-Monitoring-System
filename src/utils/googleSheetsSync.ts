@@ -72,12 +72,12 @@ export function buildGoogleSheetsData(
     'First Clock In': s.firstIn || '--',
     'Last Clock Out': s.lastOut || '--',
     'Total Break (Mins)': s.totalBreakMinutes,
-    'Net Hours Worked': Number(s.netHoursWorked.toFixed(2)),
-    'Undertime (Hrs)': Number(s.undertimeHours.toFixed(2)),
-    'Potential CTO Eligible (Hrs)': Number((s.ctoHoursEarned || 0).toFixed(2)),
-    'Flexitime Target (Hrs)': s.targetHours,
+    'Net Hours Worked': Number((Number(s.netHoursWorked) || 0).toFixed(2)),
+    'Undertime (Hrs)': Number((Number(s.undertimeHours) || 0).toFixed(2)),
+    'Potential CTO Eligible (Hrs)': Number((Number(s.ctoHoursEarned) || 0).toFixed(2)),
+    'Flexitime Target (Hrs)': s.targetHours ?? 8,
     'Status': s.status,
-    'Anomalies / Notes': s.anomalies.join(' | ') || 'None',
+    'Anomalies / Notes': (s.anomalies || []).join(' | ') || 'None',
   }));
 
   // Sheet 3: Payroll Period Summary (Aggregated per employee)
@@ -108,11 +108,11 @@ export function buildGoogleSheetsData(
       item.daysWorked += 1;
     }
     
-    const reg = s.netHoursWorked;
+    const reg = Number(s.netHoursWorked) || 0;
     item.regularHours += reg;
     item.overtimeHours = 0;
-    item.undertimeHours += s.undertimeHours;
-    item.totalNetHours += s.netHoursWorked;
+    item.undertimeHours += Number(s.undertimeHours) || 0;
+    item.totalNetHours += reg;
 
     if (s.date < item.startDate) item.startDate = s.date;
     if (s.date > item.endDate) item.endDate = s.date;

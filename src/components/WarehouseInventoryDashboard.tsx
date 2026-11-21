@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
   AlertTriangle,
   ArrowLeftRight,
   ArrowDownToLine,
   ArrowUpFromLine,
+  CalendarClock,
   Check,
   CheckCircle2,
   ChevronLeft,
@@ -40,6 +41,8 @@ import {
   STORE_BRANCHES,
   WAREHOUSE_BRANCHES,
   WAREHOUSE_UOMS,
+  NEAR_EXPIRY_THRESHOLD_DAYS,
+  evaluateItemExpiry,
   findStockReferenceByCode,
   findStockReferenceByDescription,
   generateNextStrRef,
@@ -48,11 +51,14 @@ import {
   getUniqueStockReferences,
   isMonitoredWarehouseBranch,
   mapDepartmentToBranchCode,
+  normalizeExpiryDate,
+  resolveItemExpiryDate,
 } from '../data/warehouseData';
 import { DEFAULT_STOCK_CATALOG } from '../data/warehouseCatalog';
 import { PrintableStrModal } from './PrintableStrModal';
 import {
   showActionSuccessToast,
+  showAdminAlertToast,
   showErrorAlert,
   showExportToast,
   yellowCabSwal,
@@ -152,6 +158,10 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   onDeleteLedgerEntry,
 }) => {
   const isSuperAdmin = currentUser.role === 'ADMIN';
+  const canViewLedger =
+    currentUser.role !== 'BRANCH_MANAGER' &&
+    currentUser.role !== 'SHIFT_MANAGER' &&
+    currentUser.role !== 'STAFF';
   const mappedUserBranch = mapDepartmentToBranchCode(
     currentUser.branch || currentUser.department
   );
@@ -167,6 +177,12 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   );
 
   const [subTab, setSubTab] = useState<WarehouseSubTab>('inventory');
+
+  useEffect(() => {
+    if (!canViewLedger && subTab === 'ledger') {
+      setSubTab('inventory');
+    }
+  }, [canViewLedger, subTab]);
 
   // Category names list (live from Firestore categories + fallback any used in items)
   const categoryOptions = useMemo(() => {
@@ -187,6 +203,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [inStockOnly, setInStockOnly] = useState<boolean>(false);
   const [lowStockOnly, setLowStockOnly] = useState<boolean>(false);
+  const [nearExpiryOnly, setNearExpiryOnly] = useState<boolean>(false);
   const [currentPage, setCurrentPage] = useState<number>(1);
 
   // Ledger Filters
@@ -210,6 +227,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   const [itemDesc, setItemDesc] = useState<string>('');
   const [itemCategory, setItemCategory] = useState<string>(categoryOptions[0] || 'BEVERAGE');
   const [itemBatch, setItemBatch] = useState<string>('');
+  const [itemExpiryDate, setItemExpiryDate] = useState<string>('');
   const [itemUom, setItemUom] = useState<string>('Pack');
   const [itemPrice, setItemPrice] = useState<string>('0');
   const [itemQty, setItemQty] = useState<string>('0');
@@ -391,26 +409,88 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     }).length;
   }, [monitoredInventoryItems, branchFilter, categoryFilter]);
 
+  // Per-branch Near Expiry & Expired summary (6 monitored warehouse branches only)
+  const nearExpiryByBranch = useMemo(() => {
+    const counts = new Map<WarehouseBranchCode, { total: number; expired: number }>();
+    WAREHOUSE_BRANCHES.forEach((b) => counts.set(b.code, { total: 0, expired: 0 }));
+    monitoredInventoryItems.forEach((item) => {
+      const expiry = evaluateItemExpiry(item);
+      if (expiry.isAlertActive) {
+        const cur = counts.get(item.branchCode) || { total: 0, expired: 0 };
+        counts.set(item.branchCode, {
+          total: cur.total + 1,
+          expired: cur.expired + (expiry.status === 'EXPIRED' ? 1 : 0),
+        });
+      }
+    });
+    return WAREHOUSE_BRANCHES.map((b) => {
+      const entry = counts.get(b.code) || { total: 0, expired: 0 };
+      return {
+        code: b.code,
+        name: b.name,
+        count: entry.total,
+        expiredCount: entry.expired,
+      };
+    });
+  }, [monitoredInventoryItems]);
+
+  const totalNearExpiryCount = useMemo(
+    () => nearExpiryByBranch.reduce((sum, entry) => sum + entry.count, 0),
+    [nearExpiryByBranch]
+  );
+
+  const totalExpiredCount = useMemo(
+    () => nearExpiryByBranch.reduce((sum, entry) => sum + entry.expiredCount, 0),
+    [nearExpiryByBranch]
+  );
+
+  const activeScopeNearExpiryCount = useMemo(() => {
+    return monitoredInventoryItems.filter((item) => {
+      if (branchFilter !== 'ALL' && item.branchCode !== branchFilter) return false;
+      if (categoryFilter !== 'ALL' && item.category !== categoryFilter) return false;
+      return evaluateItemExpiry(item).isAlertActive;
+    }).length;
+  }, [monitoredInventoryItems, branchFilter, categoryFilter]);
+
   // Filtered Inventory Items (6 monitored warehouse branches only)
   const filteredInventory = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    return monitoredInventoryItems.filter((item) => {
+    const list = monitoredInventoryItems.filter((item) => {
       if (branchFilter !== 'ALL' && item.branchCode !== branchFilter) return false;
       if (categoryFilter !== 'ALL' && item.category !== categoryFilter) return false;
       if (inStockOnly && (Number(item.quantity) || 0) <= 0) return false;
       if (lowStockOnly && (Number(item.quantity) || 0) >= (item.reorderLevel ?? 2)) return false;
+      if (nearExpiryOnly && !evaluateItemExpiry(item).isAlertActive) return false;
       if (q) {
         const matches =
           (item.description || '').toLowerCase().includes(q) ||
           (item.itemCode || '').toLowerCase().includes(q) ||
           (item.batchNo || '').toLowerCase().includes(q) ||
+          (item.expiryDate || '').toLowerCase().includes(q) ||
           (item.category || '').toLowerCase().includes(q) ||
           (item.branchName || '').toLowerCase().includes(q);
         if (!matches) return false;
       }
       return true;
     });
-  }, [monitoredInventoryItems, branchFilter, categoryFilter, inStockOnly, lowStockOnly, searchQuery]);
+
+    if (nearExpiryOnly) {
+      return [...list].sort((a, b) => {
+        const aDays = evaluateItemExpiry(a).daysUntil ?? 99999;
+        const bDays = evaluateItemExpiry(b).daysUntil ?? 99999;
+        return aDays - bDays;
+      });
+    }
+    return list;
+  }, [
+    monitoredInventoryItems,
+    branchFilter,
+    categoryFilter,
+    inStockOnly,
+    lowStockOnly,
+    nearExpiryOnly,
+    searchQuery,
+  ]);
 
   const totalPages = Math.max(1, Math.ceil(filteredInventory.length / ITEMS_PER_PAGE));
   const safePage = Math.min(currentPage, totalPages);
@@ -707,6 +787,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     'Description',
     'Category',
     'Batch / Exp',
+    'Expiry Date',
     'UOM',
     'Price',
     'Min',
@@ -758,7 +839,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       const rawCode = getCellValueCI(raw, ['Item Code', 'Code', 'SKU']);
       const rawDesc = getCellValueCI(raw, ['Description', 'Stock Item', 'Item', 'Item Name', 'Name']);
       const rawCat = getCellValueCI(raw, ['Category', 'Cat']);
-      const rawBatch = getCellValueCI(raw, ['Batch / Exp', 'Batch No', 'Batch', 'Expiry', 'Exp']);
+      const rawBatch = getCellValueCI(raw, ['Batch / Exp', 'Batch No', 'Batch']);
+      const rawExpiry = getCellValueCI(raw, ['Expiry Date', 'Exp Date', 'Expiry', 'Expiration Date', 'Exp']);
       const rawUom = getCellValueCI(raw, ['UOM', 'Unit']);
       const rawPrice = getCellValueCI(raw, ['Price', 'Unit Price', 'Cost']);
       const rawMin = getCellValueCI(raw, ['Min', 'Min Level', 'Reorder Level', 'Reorder']);
@@ -791,6 +873,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         .trim()
         .toUpperCase();
       const batchNo = String(rawBatch ?? refMatch?.batchNo ?? '').trim();
+      const expiryDate =
+        normalizeExpiryDate(rawExpiry) || normalizeExpiryDate(batchNo);
       const uomRaw = String(rawUom ?? refMatch?.uom ?? 'Pack').trim();
       const matchedUom =
         WAREHOUSE_UOMS.find((u) => u.toLowerCase() === uomRaw.toLowerCase()) || uomRaw || 'Pack';
@@ -823,7 +907,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
               return true;
             }
             return (
-              existing.description.trim().toLowerCase() === description.toLowerCase() &&
+              (existing.description || '').trim().toLowerCase() === description.toLowerCase() &&
               (existing.batchNo || '').trim().toLowerCase() === batchNo.toLowerCase()
             );
           })
@@ -846,6 +930,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         description,
         category,
         batchNo,
+        expiryDate,
         uom: matchedUom,
         unitPrice: Number.isNaN(parsedPrice) || parsedPrice < 0 ? 0 : parsedPrice,
         reorderLevel: Number.isNaN(parsedMin) || parsedMin < 0 ? 2 : parsedMin,
@@ -868,6 +953,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
             Description: item.description,
             Category: item.category,
             'Batch / Exp': item.batchNo || '',
+            'Expiry Date': resolveItemExpiryDate(item) || '',
             UOM: item.uom,
             Price: Number(item.unitPrice || 0),
             Min: Number(item.reorderLevel ?? 2),
@@ -880,6 +966,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
               Description: 'SAMPLE STOCK ITEM',
               Category: categoryOptions[0] || 'BEVERAGE',
               'Batch / Exp': '',
+              'Expiry Date': '',
               UOM: 'Pack',
               Price: 0,
               Min: 2,
@@ -896,6 +983,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       { wch: 40 },
       { wch: 24 },
       { wch: 16 },
+      { wch: 13 },
       { wch: 10 },
       { wch: 10 },
       { wch: 8 },
@@ -938,6 +1026,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         Description: 'SAMPLE ITEM DESCRIPTION',
         Category: categoryOptions[0] || 'BEVERAGE',
         'Batch / Exp': '12-31-26',
+        'Expiry Date': '2026-12-31',
         UOM: 'Pack',
         Price: 0,
         Min: 2,
@@ -953,6 +1042,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       { wch: 36 },
       { wch: 24 },
       { wch: 14 },
+      { wch: 13 },
       { wch: 10 },
       { wch: 10 },
       { wch: 8 },
@@ -1048,19 +1138,45 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
             branchName: row.branchName,
             quantity: row.quantity,
             reorderLevel: row.reorderLevel,
+            expiryDate: row.expiryDate,
           },
         })),
         refNumber: importRefNumber.trim() || undefined,
       });
 
+      const importedNearExpiry = actionableRows.filter(
+        (row) =>
+          evaluateItemExpiry({
+            expiryDate: row.expiryDate,
+            batchNo: row.batchNo,
+            quantity: row.quantity,
+          }).isAlertActive
+      );
+
       setShowImportModal(false);
       setImportRawRows([]);
       setImportFileName('');
-      showActionSuccessToast(
-        `Imported: ${summary.createdCount} added, ${summary.updatedCount} updated${
-          summary.categoriesAdded > 0 ? `, ${summary.categoriesAdded} new categories` : ''
-        }`
-      );
+      if (importedNearExpiry.length > 0) {
+        const hasExpired = importedNearExpiry.some(
+          (r) =>
+            evaluateItemExpiry({
+              expiryDate: r.expiryDate,
+              batchNo: r.batchNo,
+              quantity: r.quantity,
+            }).status === 'EXPIRED'
+        );
+        showAdminAlertToast(
+          `Imported with Expiry Alert (${importedNearExpiry.length})`,
+          `${summary.createdCount} added, ${summary.updatedCount} updated · ${importedNearExpiry.length} item(s) are expired or expiring within ${NEAR_EXPIRY_THRESHOLD_DAYS}d.`,
+          hasExpired ? 'critical' : 'warning'
+        );
+      } else {
+        showActionSuccessToast(
+          `Imported: ${summary.createdCount} added, ${summary.updatedCount} updated${
+            summary.categoriesAdded > 0 ? `, ${summary.categoriesAdded} new categories` : ''
+          }`
+        );
+      }
     } catch (err) {
       console.error('Bulk import failed:', err);
       showErrorAlert('Import Failed', 'An error occurred while saving imported stock items.');
@@ -1074,7 +1190,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     e.preventDefault();
     const trimmed = newCategoryName.trim().toUpperCase();
     if (!trimmed) return;
-    if (categories.some((c) => c.name.toUpperCase() === trimmed)) {
+    if (categories.some((c) => (c.name || '').toUpperCase() === trimmed)) {
       showErrorAlert('Duplicate Category', `"${trimmed}" already exists.`);
       return;
     }
@@ -1087,7 +1203,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     const trimmed = editingCategoryName.trim().toUpperCase();
     if (!trimmed) return;
     const duplicate = categories.some(
-      (c) => c.id !== categoryId && c.name.toUpperCase() === trimmed
+      (c) => c.id !== categoryId && (c.name || '').toUpperCase() === trimmed
     );
     if (duplicate) {
       showErrorAlert('Duplicate Category', `"${trimmed}" already exists.`);
@@ -1131,6 +1247,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       categoryFilter !== 'ALL' ? categoryFilter : categoryOptions[0] || 'BEVERAGE'
     );
     setItemBatch('');
+    setItemExpiryDate('');
     setItemUom('Pack');
     setItemPrice('0');
     setItemQty('0');
@@ -1153,6 +1270,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     setItemDesc(item.description);
     setItemCategory(item.category);
     setItemBatch(item.batchNo || '');
+    setItemExpiryDate(resolveItemExpiryDate(item) || '');
     setItemUom(item.uom || 'Pc');
     setItemPrice(String(item.unitPrice ?? 0));
     setItemQty(String(item.quantity ?? 0));
@@ -1255,6 +1373,19 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         ?.itemCode ||
       '';
 
+    const resolvedExpiry =
+      normalizeExpiryDate(itemExpiryDate) || normalizeExpiryDate(itemBatch);
+    const effectiveQty = editingItem
+      ? isSuperAdmin
+        ? parsedQty
+        : editingItem.quantity
+      : parsedQty;
+    const savedExpiryEval = evaluateItemExpiry({
+      expiryDate: resolvedExpiry,
+      batchNo: itemBatch.trim(),
+      quantity: effectiveQty,
+    });
+
     if (editingItem) {
       await onUpdateInventoryItem({
         ...editingItem,
@@ -1264,6 +1395,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         description: itemDesc.trim(),
         category: itemCategory,
         batchNo: itemBatch.trim(),
+        expiryDate: resolvedExpiry,
         uom: itemUom,
         unitPrice: safePrice,
         quantity: isSuperAdmin ? parsedQty : editingItem.quantity,
@@ -1271,7 +1403,17 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         updatedAt: new Date().toISOString(),
         updatedBy: currentUser.name,
       });
-      showActionSuccessToast(`Updated "${itemDesc.trim()}"`);
+      if (savedExpiryEval.isAlertActive) {
+        showAdminAlertToast(
+          `Updated · Expiry Alert (${savedExpiryEval.label})`,
+          `"${itemDesc.trim()}" at ${branch.name} is ${
+            savedExpiryEval.status === 'EXPIRED' ? 'expired' : 'nearing expiry'
+          }.`,
+          savedExpiryEval.status === 'EXPIRED' ? 'critical' : 'warning'
+        );
+      } else {
+        showActionSuccessToast(`Updated "${itemDesc.trim()}"`);
+      }
     } else {
       await onAddInventoryItem(
         {
@@ -1279,6 +1421,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
           description: itemDesc.trim(),
           category: itemCategory,
           batchNo: itemBatch.trim(),
+          expiryDate: resolvedExpiry,
           uom: itemUom,
           unitPrice: safePrice,
           branchCode: branch.code,
@@ -1289,7 +1432,17 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         itemRef.trim() || undefined,
         itemNotes.trim() || undefined
       );
-      showActionSuccessToast(`Added "${itemDesc.trim()}" to ${branch.name}`);
+      if (savedExpiryEval.isAlertActive) {
+        showAdminAlertToast(
+          `Added · Expiry Alert (${savedExpiryEval.label})`,
+          `"${itemDesc.trim()}" added to ${branch.name} is ${
+            savedExpiryEval.status === 'EXPIRED' ? 'expired' : 'nearing expiry'
+          }.`,
+          savedExpiryEval.status === 'EXPIRED' ? 'critical' : 'warning'
+        );
+      } else {
+        showActionSuccessToast(`Added "${itemDesc.trim()}" to ${branch.name}`);
+      }
     }
     setShowItemModal(false);
   };
@@ -1422,7 +1575,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     if (pickerLineIdx === null) return;
     const matchedIssuing = issuingBranchStock.find(
       (s) =>
-        s.description.toLowerCase() === catItem.description.toLowerCase() &&
+        (s.description || '').toLowerCase() === (catItem.description || '').toLowerCase() &&
         (s.batchNo || '').toLowerCase() === (catItem.batchNo || '').toLowerCase()
     );
     const resolvedCode =
@@ -1531,6 +1684,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
     const cleanedLines = lineItems
       .map((line) => {
+        const lineDesc = (line.description || '').trim();
+        const lineBatch = (line.batchNo || '').trim();
         const matchedIssuing =
           inventoryItems.find(
             (i) => i.id === line.itemId && i.branchCode === fromBranchCode
@@ -1538,14 +1693,14 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
           inventoryItems.find(
             (i) =>
               i.branchCode === fromBranchCode &&
-              i.description.toLowerCase() === line.description.trim().toLowerCase() &&
-              (i.batchNo || '').toLowerCase() === line.batchNo.trim().toLowerCase()
+              (i.description || '').toLowerCase() === lineDesc.toLowerCase() &&
+              (i.batchNo || '').toLowerCase() === lineBatch.toLowerCase()
           );
         const resolvedCode =
           (matchedIssuing?.itemCode || '').trim() ||
           (line.itemCode || '').trim() ||
           findStockReferenceByDescription(
-            line.description,
+            lineDesc,
             inventoryItems,
             fromBranchCode
           )?.itemCode ||
@@ -1553,8 +1708,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         return {
           ...line,
           itemCode: resolvedCode || undefined,
-          description: line.description.trim(),
-          batchNo: line.batchNo.trim(),
+          description: lineDesc,
+          batchNo: lineBatch,
           uom: matchedIssuing?.uom || line.uom,
           quantity: Number(line.quantity) || 0,
           unitPrice: Number(line.unitPrice) || 0,
@@ -1581,7 +1736,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
           inventoryItems.find(
             (i) =>
               i.branchCode === fromBranchCode &&
-              i.description.toLowerCase() === line.description.toLowerCase() &&
+              (i.description || '').toLowerCase() === (line.description || '').toLowerCase() &&
               (i.batchNo || '').toLowerCase() === (line.batchNo || '').toLowerCase()
           );
 
@@ -2042,8 +2197,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     const branchMatch = inventoryItems.find(
       (i) =>
         i.branchCode === ledgerFormBranch &&
-        ((i.itemCode || '').trim().toLowerCase() === match.itemCode.toLowerCase() ||
-          i.description.trim().toLowerCase() === match.description.toLowerCase())
+        ((i.itemCode || '').trim().toLowerCase() === (match.itemCode || '').toLowerCase() ||
+          (i.description || '').trim().toLowerCase() === (match.description || '').toLowerCase())
     );
     const activeItem = branchMatch || match.matchedItem;
     setLedgerFormItemId(branchMatch?.id || '');
@@ -2303,20 +2458,22 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                 </span>
               )}
             </button>
-            <button
-              type="button"
-              onClick={() => setSubTab('ledger')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold whitespace-nowrap cursor-pointer transition-colors ${
-                subTab === 'ledger'
-                  ? 'bg-zinc-950 text-amber-400 shadow-2xs'
-                  : 'text-zinc-600 hover:text-zinc-950'
-              }`}
-            >
-              Ledger
-              <span className="font-mono text-[10px] opacity-80 tabular-nums">
-                ({stockMovements.length})
-              </span>
-            </button>
+            {canViewLedger && (
+              <button
+                type="button"
+                onClick={() => setSubTab('ledger')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold whitespace-nowrap cursor-pointer transition-colors ${
+                  subTab === 'ledger'
+                    ? 'bg-zinc-950 text-amber-400 shadow-2xs'
+                    : 'text-zinc-600 hover:text-zinc-950'
+                }`}
+              >
+                Ledger
+                <span className="font-mono text-[10px] opacity-80 tabular-nums">
+                  ({stockMovements.length})
+                </span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -2487,6 +2644,28 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                   ({activeScopeLowStockCount})
                 </span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setNearExpiryOnly((prev) => !prev);
+                  setCurrentPage(1);
+                }}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-bold cursor-pointer transition-colors ${
+                  nearExpiryOnly
+                    ? 'bg-amber-600 text-white border-amber-700'
+                    : activeScopeNearExpiryCount > 0
+                    ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300'
+                    : 'bg-white text-zinc-500 border-zinc-300'
+                }`}
+                title={`Show items expired or expiring within ${NEAR_EXPIRY_THRESHOLD_DAYS} days`}
+              >
+                <CalendarClock className="w-3.5 h-3.5" />
+                Near Expiry
+                <span className="font-mono text-[11px] tabular-nums">
+                  ({activeScopeNearExpiryCount})
+                </span>
+              </button>
             </div>
 
             <div className="text-[11px] font-mono text-zinc-500 tabular-nums">
@@ -2516,6 +2695,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           } else {
                             setBranchFilter(b.code);
                             setLowStockOnly(true);
+                            setNearExpiryOnly(false);
                             setInStockOnly(false);
                           }
                           setCurrentPage(1);
@@ -2545,6 +2725,83 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                   Clear Low Stock Filter
                 </button>
               )}
+            </div>
+          )}
+
+          {/* Per-Branch Near Expiry & Expired Alert Strip */}
+          {totalNearExpiryCount > 0 && (
+            <div className="px-3.5 py-2 border-b border-amber-200 bg-amber-50/90 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 text-[11px] font-black uppercase tracking-wide text-amber-900 mr-1">
+                  <CalendarClock className="w-3.5 h-3.5 text-amber-700" />
+                  Near Expiry Alerts (≤{NEAR_EXPIRY_THRESHOLD_DAYS}d):
+                </span>
+                {totalExpiredCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[10px] font-black uppercase tracking-wider">
+                    {totalExpiredCount} Expired
+                  </span>
+                )}
+                {nearExpiryByBranch
+                  .filter((b) => b.count > 0)
+                  .map((b) => {
+                    const isActive = branchFilter === b.code && nearExpiryOnly;
+                    return (
+                      <button
+                        key={`exp-${b.code}`}
+                        type="button"
+                        onClick={() => {
+                          if (isActive) {
+                            setNearExpiryOnly(false);
+                          } else {
+                            setBranchFilter(b.code);
+                            setNearExpiryOnly(true);
+                            setLowStockOnly(false);
+                            setInStockOnly(false);
+                          }
+                          setCurrentPage(1);
+                        }}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-bold cursor-pointer transition-colors ${
+                          isActive
+                            ? 'bg-amber-600 text-white border-amber-700'
+                            : b.expiredCount > 0
+                            ? 'bg-white hover:bg-rose-50 text-rose-800 border-rose-300'
+                            : 'bg-white hover:bg-amber-100 text-amber-900 border-amber-300'
+                        }`}
+                      >
+                        <span>{b.name}</span>
+                        <span className="font-mono tabular-nums">({b.count})</span>
+                      </button>
+                    );
+                  })}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {!nearExpiryOnly && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNearExpiryOnly(true);
+                      setLowStockOnly(false);
+                      setCurrentPage(1);
+                    }}
+                    className="text-[11px] font-black text-amber-900 hover:text-zinc-950 underline cursor-pointer"
+                  >
+                    Filter Near Expiry
+                  </button>
+                )}
+                {nearExpiryOnly && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNearExpiryOnly(false);
+                      setCurrentPage(1);
+                    }}
+                    className="text-[11px] font-bold text-amber-900 hover:text-zinc-950 underline cursor-pointer"
+                  >
+                    Clear Near Expiry Filter
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -2593,10 +2850,19 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                 {paginatedInventory.map((item) => {
                   const reorderLevel = getItemReorderLevel(item);
                   const isLow = isItemLowStock(item);
+                  const expiryInfo = evaluateItemExpiry(item);
+                  const isExpired = expiryInfo.isAlertActive && expiryInfo.status === 'EXPIRED';
+                  const isNearExp = expiryInfo.isAlertActive && expiryInfo.status === 'NEAR_EXPIRY';
                   return (
                     <div
                       key={`mob-${item.id}`}
-                      className={`p-3.5 space-y-2.5 ${isLow ? 'bg-rose-50/75' : 'bg-white'}`}
+                      className={`p-3.5 space-y-2.5 ${
+                        isLow || isExpired
+                          ? 'bg-rose-50/75'
+                          : isNearExp
+                          ? 'bg-amber-50/75'
+                          : 'bg-white'
+                      }`}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
@@ -2612,6 +2878,17 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                 <AlertTriangle className="w-2.5 h-2.5" /> Low
                               </span>
                             )}
+                            {expiryInfo.isAlertActive && (
+                              <span
+                                className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                                  isExpired
+                                    ? 'bg-rose-700 text-white'
+                                    : 'bg-amber-500 text-zinc-950'
+                                }`}
+                              >
+                                <CalendarClock className="w-2.5 h-2.5" /> {expiryInfo.label}
+                              </span>
+                            )}
                           </div>
                           <div className="font-bold text-sm text-zinc-950 mt-0.5 break-words">
                             {item.description}
@@ -2622,6 +2899,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               ({item.branchCode})
                             </span>
                             {item.batchNo ? ` · Batch ${item.batchNo}` : ''}
+                            {expiryInfo.expiryDate ? ` · Exp ${expiryInfo.expiryDate}` : ''}
                           </div>
                         </div>
 
@@ -2763,12 +3041,17 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                     {paginatedInventory.map((item) => {
                       const reorderLevel = getItemReorderLevel(item);
                       const isLow = isItemLowStock(item);
+                      const expiryInfo = evaluateItemExpiry(item);
+                      const isExpired = expiryInfo.isAlertActive && expiryInfo.status === 'EXPIRED';
+                      const isNearExp = expiryInfo.isAlertActive && expiryInfo.status === 'NEAR_EXPIRY';
                       return (
                         <tr
                           key={item.id}
                           className={`transition-colors ${
-                            isLow
+                            isLow || isExpired
                               ? 'bg-rose-50/75 hover:bg-rose-100/60'
+                              : isNearExp
+                              ? 'bg-amber-50/70 hover:bg-amber-100/60'
                               : 'hover:bg-amber-50/40'
                           }`}
                         >
@@ -2785,6 +3068,18 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                   <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
                                 </span>
                               )}
+                              {!isLow && expiryInfo.isAlertActive && (
+                                <span
+                                  className="inline-flex shrink-0"
+                                  title={expiryInfo.label}
+                                >
+                                  <CalendarClock
+                                    className={`w-3.5 h-3.5 ${
+                                      isExpired ? 'text-rose-600' : 'text-amber-600'
+                                    }`}
+                                  />
+                                </span>
+                              )}
                               <span>{item.description}</span>
                             </div>
                           </td>
@@ -2798,7 +3093,30 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                             </span>
                           </td>
                           <td className="px-3 py-2 font-mono text-[11px] text-zinc-600 whitespace-nowrap">
-                            {item.batchNo || '—'}
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span>
+                                {item.batchNo || expiryInfo.expiryDate || '—'}
+                              </span>
+                              {item.batchNo &&
+                                expiryInfo.expiryDate &&
+                                item.expiryDate &&
+                                item.batchNo !== item.expiryDate && (
+                                  <span className="text-[10px] text-zinc-500">
+                                    ({expiryInfo.expiryDate})
+                                  </span>
+                                )}
+                              {expiryInfo.isAlertActive && (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded font-sans text-[9px] font-black uppercase tracking-wider ${
+                                    isExpired
+                                      ? 'bg-rose-600 text-white'
+                                      : 'bg-amber-500 text-zinc-950'
+                                  }`}
+                                >
+                                  {expiryInfo.label}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-3 py-2 text-center font-semibold text-zinc-700 whitespace-nowrap">
                             {item.uom}
@@ -3140,13 +3458,13 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         ? issuingBranchStock.find(
                             (s) =>
                               (s.itemCode || '').trim().toLowerCase() ===
-                              line.itemCode!.trim().toLowerCase()
+                              (line.itemCode || '').trim().toLowerCase()
                           )
                         : undefined) ||
                       (line.description
                         ? issuingBranchStock.find(
                             (s) =>
-                              s.description.toLowerCase() === line.description.toLowerCase() &&
+                              (s.description || '').toLowerCase() === (line.description || '').toLowerCase() &&
                               (s.batchNo || '').toLowerCase() === (line.batchNo || '').toLowerCase()
                           )
                         : undefined);
@@ -3278,14 +3596,14 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                             ? issuingBranchStock.find(
                                 (s) =>
                                   (s.itemCode || '').trim().toLowerCase() ===
-                                  line.itemCode!.trim().toLowerCase()
+                                  (line.itemCode || '').trim().toLowerCase()
                               )
                             : undefined) ||
                           (line.description
                             ? issuingBranchStock.find(
                                 (s) =>
-                                  s.description.toLowerCase() ===
-                                    line.description.toLowerCase() &&
+                                  (s.description || '').toLowerCase() ===
+                                    (line.description || '').toLowerCase() &&
                                   (s.batchNo || '').toLowerCase() ===
                                     (line.batchNo || '').toLowerCase()
                               )
@@ -3834,7 +4152,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       {/* ===================================================================== */}
       {/* TAB 3: STOCK MOVEMENT LEDGER                                          */}
       {/* ===================================================================== */}
-      {subTab === 'ledger' && (
+      {subTab === 'ledger' && canViewLedger && (
         <div className="bg-white rounded-xl border border-zinc-200 shadow-2xs overflow-hidden">
           <div className="px-3.5 py-2.5 border-b border-zinc-200 bg-zinc-50 flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2 flex-1">
@@ -4389,7 +4707,14 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                   <input
                     type="text"
                     value={itemBatch}
-                    onChange={(e) => setItemBatch(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setItemBatch(val);
+                      const parsed = normalizeExpiryDate(val);
+                      if (parsed && !itemExpiryDate) {
+                        setItemExpiryDate(parsed);
+                      }
+                    }}
                     placeholder="e.g. 10-31-28"
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
                   />
@@ -4410,6 +4735,49 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                     ))}
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
+                  Expiry Date (Near-Expiry Alerts ≤{NEAR_EXPIRY_THRESHOLD_DAYS} Days)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={itemExpiryDate}
+                    onChange={(e) => setItemExpiryDate(e.target.value)}
+                    className="flex-1 px-2.5 py-1.5 rounded-lg border border-zinc-300 font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                  {itemExpiryDate && (
+                    <button
+                      type="button"
+                      onClick={() => setItemExpiryDate('')}
+                      className="px-2 py-1.5 rounded-lg border border-zinc-300 bg-zinc-50 hover:bg-zinc-100 text-[11px] font-bold text-zinc-600 cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {(() => {
+                  const previewEval = evaluateItemExpiry({
+                    expiryDate: itemExpiryDate || undefined,
+                    batchNo: itemBatch,
+                    quantity: Number(itemQty) || 1,
+                  });
+                  if (previewEval.status === 'EXPIRED' || previewEval.status === 'NEAR_EXPIRY') {
+                    return (
+                      <p
+                        className={`mt-1 inline-flex items-center gap-1 text-[11px] font-bold ${
+                          previewEval.status === 'EXPIRED' ? 'text-rose-700' : 'text-amber-800'
+                        }`}
+                      >
+                        <CalendarClock className="w-3.5 h-3.5 shrink-0" />
+                        Alert: {previewEval.label} ({previewEval.expiryDate})
+                      </p>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -4713,14 +5081,17 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                     <div className="md:hidden divide-y divide-zinc-200">
                       {filteredPickerStock.slice(0, 120).map((item) => {
                         const isLow = isItemLowStock(item);
+                        const expEval = evaluateItemExpiry(item);
                         return (
                           <button
                             key={`mob-pick-${item.id}`}
                             type="button"
                             onClick={() => handleSelectStockItemForLine(item)}
                             className={`w-full text-left p-3 flex items-start justify-between gap-2 cursor-pointer transition-colors ${
-                              isLow
+                              isLow || (expEval.isAlertActive && expEval.status === 'EXPIRED')
                                 ? 'bg-rose-50/70 hover:bg-amber-100/70'
+                                : expEval.isAlertActive
+                                ? 'bg-amber-50/70 hover:bg-amber-100/70'
                                 : 'hover:bg-amber-50'
                             }`}
                           >
@@ -4741,11 +5112,24 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               >
                                 {item.quantity} {item.uom}
                               </div>
-                              {isLow && (
-                                <span className="text-[9px] font-black uppercase text-rose-600">
-                                  Low
-                                </span>
-                              )}
+                              <div className="flex items-center justify-end gap-1">
+                                {isLow && (
+                                  <span className="text-[9px] font-black uppercase text-rose-600">
+                                    Low
+                                  </span>
+                                )}
+                                {expEval.isAlertActive && (
+                                  <span
+                                    className={`text-[9px] font-black uppercase ${
+                                      expEval.status === 'EXPIRED'
+                                        ? 'text-rose-700'
+                                        : 'text-amber-700'
+                                    }`}
+                                  >
+                                    {expEval.label}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </button>
                         );
@@ -4758,7 +5142,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           <th className="px-3 py-2 w-24">Code</th>
                           <th className="px-3 py-2">Item Description</th>
                           <th className="px-3 py-2">Category</th>
-                          <th className="px-3 py-2">Batch</th>
+                          <th className="px-3 py-2">Batch / Exp</th>
                           <th className="px-3 py-2 text-center">UOM</th>
                           <th className="px-3 py-2 text-right">On Hand</th>
                         </tr>
@@ -4766,13 +5150,16 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                       <tbody className="divide-y divide-zinc-200">
                         {filteredPickerStock.slice(0, 120).map((item) => {
                           const isLow = isItemLowStock(item);
+                          const expEval = evaluateItemExpiry(item);
                           return (
                             <tr
                               key={item.id}
                               onClick={() => handleSelectStockItemForLine(item)}
                               className={`cursor-pointer transition-colors ${
-                                isLow
+                                isLow || (expEval.isAlertActive && expEval.status === 'EXPIRED')
                                   ? 'bg-rose-50/70 hover:bg-amber-100/70'
+                                  : expEval.isAlertActive
+                                  ? 'bg-amber-50/70 hover:bg-amber-100/70'
                                   : 'hover:bg-amber-50'
                               }`}
                             >
@@ -4786,7 +5173,18 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                 {item.category}
                               </td>
                               <td className="px-3 py-2 font-mono text-[11px] text-zinc-500 whitespace-nowrap">
-                                {item.batchNo || '—'}
+                                <span>{item.batchNo || expEval.expiryDate || '—'}</span>
+                                {expEval.isAlertActive && (
+                                  <span
+                                    className={`ml-1.5 px-1 py-0.5 rounded font-sans text-[9px] font-black uppercase ${
+                                      expEval.status === 'EXPIRED'
+                                        ? 'bg-rose-600 text-white'
+                                        : 'bg-amber-400 text-zinc-950'
+                                    }`}
+                                  >
+                                    {expEval.label}
+                                  </span>
+                                )}
                               </td>
                               <td className="px-3 py-2 text-center font-semibold text-zinc-700 whitespace-nowrap">
                                 {item.uom}
@@ -4894,7 +5292,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       {/* ===================================================================== */}
       {/* LEDGER REMARKS VIEW MODAL                                             */}
       {/* ===================================================================== */}
-      {viewingRemarksEntry && (
+      {viewingRemarksEntry && canViewLedger && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/75 backdrop-blur-xs p-4">
           <div className="bg-white rounded-xl border-2 border-zinc-950 shadow-2xl w-full max-w-md overflow-hidden">
             <div className="bg-zinc-950 text-amber-400 px-4 py-3 flex items-center justify-between">
@@ -5515,6 +5913,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           </span>
                           <span className="font-bold text-zinc-900">
                             Qty {row.quantity} {row.uom} (Min {row.reorderLevel})
+                            {row.expiryDate ? ` · Exp ${row.expiryDate}` : ''}
                           </span>
                         </div>
                       </div>
@@ -5531,6 +5930,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <th className="px-3 py-2 font-black">Code</th>
                         <th className="px-3 py-2 font-black">Description</th>
                         <th className="px-3 py-2 font-black">Category</th>
+                        <th className="px-3 py-2 font-black">Expiry</th>
                         <th className="px-3 py-2 font-black text-center">UOM</th>
                         <th className="px-3 py-2 font-black text-right">Min</th>
                         <th className="px-3 py-2 font-black text-right">Qty</th>
@@ -5592,6 +5992,9 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           </td>
                           <td className="px-3 py-1.5 text-[11px] whitespace-nowrap">
                             {row.category}
+                          </td>
+                          <td className="px-3 py-1.5 font-mono text-[11px] whitespace-nowrap">
+                            {row.expiryDate || row.batchNo || '—'}
                           </td>
                           <td className="px-3 py-1.5 text-center font-semibold">{row.uom}</td>
                           <td className="px-3 py-1.5 text-right font-mono tabular-nums">

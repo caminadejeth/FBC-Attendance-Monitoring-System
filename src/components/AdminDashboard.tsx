@@ -217,7 +217,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const existingDispute = disputes.find(
       (d) => d.employeeId === s.employeeId && d.targetDate === s.date
     );
-    const existingRemark = existingDispute?.reason || (s.anomalies.length > 0 ? s.anomalies.join(' | ') : '');
+    const existingRemark = existingDispute?.reason || ((s.anomalies || []).length > 0 ? (s.anomalies || []).join(' | ') : '');
 
     const result = await showRemarkPromptAlert(
       s.employeeName,
@@ -429,10 +429,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const filteredSummaries = rangeSummaries
     .filter((s) => {
       const formattedDate = formatDateMDYY(s.date);
+      const q = searchTerm.toLowerCase();
       const matchesSearch =
-        s.employeeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        s.employeeId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        s.date.includes(searchTerm) ||
+        (s.employeeName || '').toLowerCase().includes(q) ||
+        (s.employeeId || '').toLowerCase().includes(q) ||
+        (s.date || '').includes(searchTerm) ||
         formattedDate.includes(searchTerm);
 
       const matchesStatus =
@@ -656,7 +657,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const unreadAlertsCount = adminAlerts.filter((a) => !readAlertIds.has(a.id)).length;
         const criticalAlertsCount = adminAlerts.filter((a) => a.severity === 'critical').length;
         const filteredOverviewAlerts = adminAlerts.filter((a) => {
-          if (alertFilter === 'WAREHOUSE') return a.category === 'STR' || a.category === 'LOW_STOCK';
+          if (alertFilter === 'WAREHOUSE') {
+            return a.category === 'STR' || a.category === 'LOW_STOCK' || a.category === 'NEAR_EXPIRY';
+          }
           if (alertFilter === 'DISPUTE') return a.category === 'DISPUTE';
           if (alertFilter === 'ATTENDANCE') return a.category === 'ATTENDANCE' || a.category === 'CTO';
           return true;
@@ -685,7 +688,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-zinc-500 mt-0.5">
-                    Live queue for pending STR reviews, monitored branch low stock, timecard disputes, and missing punches.
+                    Live queue for pending STR reviews, monitored branch low stock & near-expiry items, timecard disputes, and missing punches.
                   </p>
                 </div>
               </div>
@@ -698,7 +701,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       {
                         id: 'WAREHOUSE',
                         label: `STR & Stock (${
-                          adminAlerts.filter((a) => a.category === 'STR' || a.category === 'LOW_STOCK').length
+                          adminAlerts.filter(
+                            (a) =>
+                              a.category === 'STR' ||
+                              a.category === 'LOW_STOCK' ||
+                              a.category === 'NEAR_EXPIRY'
+                          ).length
                         })`,
                       },
                       {
@@ -759,7 +767,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   No active alerts in this view
                 </p>
                 <p className="text-[11px] text-zinc-500">
-                  Pending STR requisitions, low stock thresholds, and employee disputes will surface here automatically.
+                  Pending STR requisitions, low stock & near-expiry thresholds, and employee disputes will surface here automatically.
                 </p>
               </div>
             ) : (
@@ -784,7 +792,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       ? Package
                       : alert.category === 'DISPUTE'
                       ? Clock
-                      : alert.category === 'CTO'
+                      : alert.category === 'CTO' || alert.category === 'NEAR_EXPIRY'
                       ? CalendarClock
                       : AlertTriangle;
 
@@ -1009,7 +1017,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* SECTION 2: BIOMETRIC LOGS & ANOMALY FILTER TABLE */}
       {(activeTab === 'logs' || activeTab === 'dtr-logs' || activeTab === 'overview' || activeTab === 'all') && (
-        <div className="bg-white rounded-2xl border border-[#D3D8C8] p-6 shadow-xs space-y-4">
+        <div className={`bg-white rounded-2xl border border-[#D3D8C8] p-6 shadow-xs space-y-4 ${activeTab === 'dtr-logs' ? 'print:hidden no-print' : ''}`}>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h2 className="text-base font-bold text-[#2C3524]">
@@ -1233,19 +1241,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className="grid grid-cols-4 gap-1 text-center text-[11px] font-mono bg-gray-50 rounded-lg p-1.5 border border-gray-200">
                       <div>
                         <span className="block text-[9px] font-sans text-gray-500 uppercase">Break</span>
-                        <span className="font-bold text-gray-700">{s.totalBreakMinutes}m</span>
+                        <span className="font-bold text-gray-700">{s.totalBreakMinutes || 0}m</span>
                       </div>
                       <div>
                         <span className="block text-[9px] font-sans text-gray-500 uppercase">Gross</span>
-                        <span className="font-bold text-gray-700">{grossHours.toFixed(1)}h</span>
+                        <span className="font-bold text-gray-700">{(Number(grossHours) || 0).toFixed(1)}h</span>
                       </div>
                       <div>
                         <span className="block text-[9px] font-sans text-gray-500 uppercase">Worked</span>
-                        <span className="font-extrabold text-[#2C3524]">{s.netHoursWorked.toFixed(1)}h</span>
+                        <span className="font-extrabold text-[#2C3524]">{(Number(s.netHoursWorked) || 0).toFixed(1)}h</span>
                       </div>
                       <div>
                         <span className="block text-[9px] font-sans text-gray-500 uppercase">OT</span>
-                        <span className="font-bold text-sky-700">{s.overtimeHours > 0 ? `+${s.overtimeHours.toFixed(1)}h` : '0.0h'}</span>
+                        <span className="font-bold text-sky-700">{(Number(s.overtimeHours) || 0) > 0 ? `+${(Number(s.overtimeHours) || 0).toFixed(1)}h` : '0.0h'}</span>
                       </div>
                     </div>
 
@@ -1254,8 +1262,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div className={`px-2 py-1 rounded-md font-bold text-[10px] ${existingDispute.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800' : existingDispute.status === 'REJECTED' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-900 border border-amber-300'}`}>
                           📌 {existingDispute.status}: {existingDispute.reason}
                         </div>
-                      ) : s.anomalies.length > 0 ? (
-                        <div className="text-gray-600 text-[10px]">{s.anomalies.join('; ')}</div>
+                      ) : (s.anomalies || []).length > 0 ? (
+                        <div className="text-gray-600 text-[10px]">{(s.anomalies || []).join('; ')}</div>
                       ) : null}
                     </div>
 
@@ -1407,16 +1415,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           )}
                         </td>
                         <td className="p-3 text-center font-mono text-gray-600">
-                          {(s.totalBreakMinutes / 60).toFixed(1)}h ({s.totalBreakMinutes}m)
+                          {((Number(s.totalBreakMinutes) || 0) / 60).toFixed(1)}h ({s.totalBreakMinutes || 0}m)
                         </td>
                         <td className="p-3 text-center font-mono font-bold text-gray-700">
-                          {grossHours.toFixed(1)} hrs
+                          {(Number(grossHours) || 0).toFixed(1)} hrs
                         </td>
                         <td className="p-3 text-center font-mono font-bold text-[#2C3524]">
-                          {s.netHoursWorked.toFixed(1)} hrs
+                          {(Number(s.netHoursWorked) || 0).toFixed(1)} hrs
                         </td>
                         <td className="p-3 text-center font-mono font-bold text-sky-700">
-                          {s.overtimeHours > 0 ? `+${s.overtimeHours.toFixed(1)}h` : '0.0h'}
+                          {(Number(s.overtimeHours) || 0) > 0 ? `+${(Number(s.overtimeHours) || 0).toFixed(1)}h` : '0.0h'}
                         </td>
                         <td className="p-3 text-[11px] text-gray-700 min-w-[200px]">
                           <div className="flex flex-col gap-1 items-start">
@@ -1432,8 +1440,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               >
                                 📌 {existingDispute.status}: {existingDispute.reason}
                               </span>
-                            ) : s.anomalies.length > 0 ? (
-                              <span className="text-gray-600 text-[10px]">{s.anomalies.join('; ')}</span>
+                            ) : (s.anomalies || []).length > 0 ? (
+                              <span className="text-gray-600 text-[10px]">{(s.anomalies || []).join('; ')}</span>
                             ) : (
                               <span className="text-gray-400 text-[10px] italic">No concerns</span>
                             )}
@@ -1497,11 +1505,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* SECTION 3: DISPUTE APPROVALS MODAL & LIST */}
       {(activeTab === 'disputes' || activeTab === 'all') && (() => {
         const filteredAdminDisputes = disputes.filter((d) => {
+          const q = adminDisputeSearch.toLowerCase();
           const matchSearch =
             !adminDisputeSearch ||
-            d.employeeName.toLowerCase().includes(adminDisputeSearch.toLowerCase()) ||
-            d.employeeId.toLowerCase().includes(adminDisputeSearch.toLowerCase()) ||
-            d.reason.toLowerCase().includes(adminDisputeSearch.toLowerCase());
+            (d.employeeName || '').toLowerCase().includes(q) ||
+            (d.employeeId || '').toLowerCase().includes(q) ||
+            (d.reason || '').toLowerCase().includes(q);
 
           const matchStatus =
             adminDisputeStatusFilter === 'ALL' || d.status === adminDisputeStatusFilter;
@@ -1710,15 +1719,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           const q = userSearchQuery.trim().toLowerCase();
           const matchesQuery =
             !q ||
-            u.name.toLowerCase().includes(q) ||
-            u.employeeId.toLowerCase().includes(q) ||
+            (u.name || '').toLowerCase().includes(q) ||
+            (u.employeeId || '').toLowerCase().includes(q) ||
             (u.position && u.position.toLowerCase().includes(q)) ||
             (u.department && u.department.toLowerCase().includes(q)) ||
             (u.role && u.role.toLowerCase().includes(q)) ||
             (u.passcodePin && u.passcodePin.includes(q)) ||
             (u.email && u.email.toLowerCase().includes(q));
 
-          const roleUpper = u.role.toUpperCase();
+          const roleUpper = (u.role || '').toUpperCase();
           const matchesRole =
             userRoleFilter === 'ALL'
               ? true

@@ -1,13 +1,8 @@
 import React, { useState } from 'react';
-import { User, UserRole } from '../types';
+import { User } from '../types';
 import {
-  Shield,
-  KeyRound,
-  Calculator,
   ArrowRight,
   Lock,
-  CheckCircle2,
-  User as UserIcon,
   AlertCircle,
   Hash,
 } from 'lucide-react';
@@ -24,12 +19,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ users, onLoginSuccess 
   const [userIdInput, setUserIdInput] = useState('');
   const [pinInput, setPinInput] = useState('');
   const [loginError, setLoginError] = useState('');
-
-  // Group users by role for organized dropdown and quick access
-  const staffUsers = users.filter((u) => u.role === 'STAFF');
-  const managerUsers = users.filter((u) => u.role === 'SHIFT_MANAGER' || u.role === 'BRANCH_MANAGER');
-  const adminUsers = users.filter((u) => u.role === 'ADMIN');
-  const payrollUsers = users.filter((u) => u.role === 'PAYROLL');
 
   // Handle User ID + PIN Submission
   const handleLoginSubmit = (e?: React.FormEvent) => {
@@ -52,7 +41,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ users, onLoginSuccess 
     // Match by employeeId OR email AND pin
     const matchedUser = users.find(
       (u) =>
-        (u.employeeId.toUpperCase() === trimmedUserId || u.email.toUpperCase() === trimmedUserId) &&
+        ((u.employeeId || '').toUpperCase() === trimmedUserId ||
+          (u.email || '').toUpperCase() === trimmedUserId) &&
         u.pin === trimmedPin &&
         u.status === 'ACTIVE'
     );
@@ -66,44 +56,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ users, onLoginSuccess 
     }
   };
 
-  // Handle Touch Keypad Press for PIN
-  const handleKeypadPress = (digit: string) => {
-    if (pinInput.length < 6) {
-      const nextPin = pinInput + digit;
-      setPinInput(nextPin);
-      setLoginError('');
-
-      // Auto-submit if User ID is filled and PIN reaches 4 digits
-      if (userIdInput.trim() && nextPin.length === 4) {
-        const trimmedUserId = userIdInput.trim().toUpperCase();
-        const matched = users.find(
-          (u) =>
-            (u.employeeId.toUpperCase() === trimmedUserId || u.email.toUpperCase() === trimmedUserId) &&
-            u.pin === nextPin &&
-            u.status === 'ACTIVE'
-        );
-        if (matched) {
-          showLoginToast(matched.name, matched.role);
-          onLoginSuccess(matched);
-        }
-      }
-    }
-  };
-
-  const handleBackspace = () => {
-    setPinInput((prev) => prev.slice(0, -1));
-    setLoginError('');
-  };
-
-  // Quick Demo Auto-Fill & Login
-  const handleQuickLogin = (user: User) => {
-    setUserIdInput(user.employeeId);
-    setPinInput(user.pin);
-    setLoginError('');
-    showLoginToast(user.name, user.role);
-    onLoginSuccess(user);
-  };
-
   return (
     <div className="min-h-screen bg-[#FAF9F5] flex flex-col justify-center items-center py-12 px-4 sm:px-6 lg:px-8">
       {/* Brand Header */}
@@ -114,9 +66,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ users, onLoginSuccess 
         <h2 className="text-2xl sm:text-3xl font-black text-zinc-950 tracking-tight uppercase">
           FBC Restaurants Corp
         </h2>
-        <p className="mt-1 text-xs font-bold text-amber-800">
-          Biometric Attendance 
-        </p>
       </div>
 
       {/* Main Login Card */}
@@ -148,6 +97,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ users, onLoginSuccess 
                   <input
                     id="input-user-id"
                     type="text"
+                    autoComplete="username"
                     placeholder="e.g. 1234567"
                     value={userIdInput}
                     onChange={(e) => {
@@ -170,6 +120,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ users, onLoginSuccess 
                   <input
                     id="input-user-pin"
                     type="password"
+                    inputMode="numeric"
+                    autoComplete="current-password"
                     maxLength={6}
                     placeholder="Enter 4-Digit PIN"
                     value={pinInput}
@@ -191,47 +143,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ users, onLoginSuccess 
                   <span>{loginError}</span>
                 </div>
               )}
-
-              {/* ON-SCREEN KEYPAD FOR PIN TOUCH ACCESS */}
-              <div className="space-y-2 pt-1">
-                <p className="text-[10px] font-black uppercase text-zinc-500 text-center">
-                  Touch Keypad (Optional PIN Entry)
-                </p>
-                <div className="grid grid-cols-3 gap-2 max-w-xs mx-auto">
-                  {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
-                    <button
-                      key={digit}
-                      type="button"
-                      id={`pin-btn-${digit}`}
-                      onClick={() => handleKeypadPress(digit)}
-                      className="h-10 rounded-xl bg-amber-100 hover:bg-amber-200 active:bg-amber-400 text-zinc-950 font-black text-base border border-amber-300 shadow-2xs transition-colors flex items-center justify-center cursor-pointer"
-                    >
-                      {digit}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => setPinInput('')}
-                    className="h-10 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-[11px] font-bold text-zinc-700 flex items-center justify-center border border-zinc-200 cursor-pointer"
-                  >
-                    Clear
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleKeypadPress('0')}
-                    className="h-10 rounded-xl bg-amber-100 hover:bg-amber-200 text-zinc-950 font-black text-base border border-amber-300 shadow-2xs flex items-center justify-center cursor-pointer"
-                  >
-                    0
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleBackspace}
-                    className="h-10 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-[11px] font-bold text-zinc-700 flex items-center justify-center border border-zinc-200 cursor-pointer"
-                  >
-                    ⌫
-                  </button>
-                </div>
-              </div>
 
               {/* SUBMIT BUTTON */}
               <button

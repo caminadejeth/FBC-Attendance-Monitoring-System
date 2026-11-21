@@ -55,6 +55,7 @@ import {
 import {
   buildDefaultCatalogItemsForBranch,
   buildDefaultWarehouseCategories,
+  evaluateItemExpiry,
   findStockReferenceByCode,
   findStockReferenceByDescription,
   getBranchByCode,
@@ -271,8 +272,16 @@ export default function App() {
   const [currentSyncLog, setCurrentSyncLog] = useState<SyncLog | null>(null);
   const [showSyncModal, setShowSyncModal] = useState<boolean>(false);
 
+  const getDefaultTabForRole = (role?: UserRole): string => {
+    if (role === 'ADMIN') return 'overview';
+    if (role === 'BRANCH_MANAGER' || role === 'PAYROLL') return 'dtr-logs';
+    return 'my-punches';
+  };
+
   // Navigation Tab State
-  const [activeTab, setActiveTab] = useState<string>('overview');
+  const [activeTab, setActiveTab] = useState<string>(() =>
+    getDefaultTabForRole(currentUser?.role)
+  );
 
   // Super Admin Alert Notification State (read/dismissed persisted per admin user)
   const [readAlertIds, setReadAlertIds] = useState<Set<string>>(() =>
@@ -297,6 +306,16 @@ export default function App() {
         summaries,
       }),
     [stockTransfers, warehouseItems, disputes, ctoRequests, summaries]
+  );
+
+  const monitoredNearExpiryEntries = useMemo(
+    () =>
+      warehouseItems
+        .filter((item) => item && isMonitoredWarehouseBranch(item.branchCode))
+        .map((item) => ({ item, expiry: evaluateItemExpiry(item) }))
+        .filter(({ expiry }) => expiry.isAlertActive)
+        .sort((a, b) => (a.expiry.daysUntil ?? 9999) - (b.expiry.daysUntil ?? 9999)),
+    [warehouseItems]
   );
 
   const visibleAdminAlerts = useMemo(
@@ -385,29 +404,66 @@ export default function App() {
     }
   }, [allAdminAlerts, currentUser?.role, dismissedAlertIds]);
 
-  // Security guard: Only ADMIN role can access activity-logs
+  // Alert logged-in warehouse users once per session when near-expiry or expired stock items exist
   useEffect(() => {
-    if (currentUser && currentUser.role !== 'ADMIN' && activeTab === 'activity-logs') {
-      if (currentUser.role === 'BRANCH_MANAGER' || currentUser.role === 'PAYROLL') {
-        setActiveTab('dtr-logs');
-      } else {
-        setActiveTab('my-punches');
+    if (!currentUser || monitoredNearExpiryEntries.length === 0) return;
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const storageKey = `fbc_near_expiry_notified_${currentUser.id}_${todayKey}_${monitoredNearExpiryEntries.length}`;
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage.getItem(storageKey)) {
+        return;
       }
+    } catch {
+      // Ignore storage access errors
+    }
+
+    const timer = setTimeout(() => {
+      const expiredCount = monitoredNearExpiryEntries.filter(
+        (e) => e.expiry.status === 'EXPIRED'
+      ).length;
+      const top = monitoredNearExpiryEntries[0];
+      const total = monitoredNearExpiryEntries.length;
+      const title =
+        expiredCount > 0
+          ? `Expired / Near-Expiry Stock Alert (${total})`
+          : `Near-Expiry Stock Alert (${total})`;
+      const text =
+        total === 1
+          ? `${top.item.description} (${top.item.branchName}) · ${top.expiry.label}. Check Warehouse & STR.`
+          : `${top.item.description} (${top.expiry.label}) +${total - 1} more item(s). Check Warehouse & STR.`;
+
+      showAdminAlertToast(title, text, expiredCount > 0 ? 'critical' : 'warning');
+      try {
+        if (typeof window !== 'undefined') {
+          window.sessionStorage.setItem(storageKey, '1');
+        }
+      } catch {
+        // Ignore storage errors
+      }
+    }, 1400);
+
+    return () => clearTimeout(timer);
+  }, [currentUser, monitoredNearExpiryEntries]);
+
+  // Security guard: Only ADMIN role can access activity-logs or overview; BRANCH_MANAGER does not use my-punches; STAFF cannot access my-cto
+  useEffect(() => {
+    if (!currentUser) return;
+    if (
+      currentUser.role !== 'ADMIN' &&
+      (activeTab === 'activity-logs' || activeTab === 'overview' || activeTab === 'dashboard')
+    ) {
+      setActiveTab(getDefaultTabForRole(currentUser.role));
+    } else if (currentUser.role === 'BRANCH_MANAGER' && activeTab === 'my-punches') {
+      setActiveTab('dtr-logs');
+    } else if (currentUser.role === 'STAFF' && activeTab === 'my-cto') {
+      setActiveTab('my-punches');
     }
   }, [currentUser, activeTab]);
 
   // Login handler
   const handleLoginSuccess = (user: User) => {
     setCurrentUser(user);
-    if (user.role === 'ADMIN') {
-      setActiveTab('overview');
-    } else if (user.role === 'BRANCH_MANAGER') {
-      setActiveTab('dtr-logs');
-    } else if (user.role === 'PAYROLL') {
-      setActiveTab('dtr-logs');
-    } else {
-      setActiveTab('my-punches');
-    }
+    setActiveTab(getDefaultTabForRole(user.role));
   };
 
   // Logout handler
@@ -472,8 +528,13 @@ export default function App() {
     if (updatedMgrApp) approvers.push(`Branch Manager (${updatedMgrBy || 'Manager'})`);
     if (updatedPayApp) approvers.push(`Payroll (${updatedPayBy || 'Payroll'})`);
 
+    const normalizedDate = targetDispute.date || (targetDispute as any).targetDate || '';
+    const normalizedType = targetDispute.type || (targetDispute as any).disputeType || 'MISSING_PUNCH';
+
     const updatedDisputeItem: DisputeRequest = {
       ...targetDispute,
+      date: normalizedDate,
+      type: normalizedType,
       status: fullyApproved ? 'APPROVED' : 'PENDING',
       adminNotes: adminNotes || targetDispute.adminNotes,
       reviewedBy: approvers.join(' & ') || currentUser?.name || 'Authorized Approver',
@@ -638,6 +699,8 @@ export default function App() {
 
     const updatedDisputeItem: DisputeRequest = {
       ...targetDispute,
+      date: targetDispute.date || (targetDispute as any).targetDate || '',
+      type: targetDispute.type || (targetDispute as any).disputeType || 'MISSING_PUNCH',
       status: 'REJECTED',
       adminNotes,
       reviewedBy: currentUser?.name || 'Branch Manager / Admin',
@@ -663,6 +726,8 @@ export default function App() {
   ) => {
     const dispute: DisputeRequest = {
       ...newDispute,
+      date: newDispute.date || (newDispute as any).targetDate || '',
+      type: newDispute.type || (newDispute as any).disputeType || 'MISSING_PUNCH',
       id: `disp-${Date.now()}`,
       status: 'PENDING',
       submittedAt: new Date().toISOString(),
@@ -680,6 +745,7 @@ export default function App() {
   const handleSubmitCtoRequest = (
     newReq: Omit<CtoRequest, 'id' | 'status' | 'submittedAt'>
   ) => {
+    if (currentUser?.role === 'STAFF') return;
     const req: CtoRequest = {
       ...newReq,
       id: `cto-req-${Date.now()}`,
@@ -735,7 +801,7 @@ export default function App() {
     // If fully approved and it's a LEAVE request, mark Attendance Summary as LEAVE
     if (isFullyApproved && updatedCtoItem.requestType !== 'CREDIT') {
       const target: CtoRequest = updatedCtoItem;
-      let updatedSummaryItem: AttendanceSummaryDaily | null = null;
+      let updatedSummaryItem: AttendanceSummaryDaily;
       const existingIdx = summaries.findIndex(
         (s) => s.employeeId === target.employeeId && s.date === target.date
       );
@@ -782,10 +848,10 @@ export default function App() {
         );
         if (idx >= 0) {
           const next = [...prevSummaries];
-          next[idx] = updatedSummaryItem!;
+          next[idx] = updatedSummaryItem;
           return next;
         }
-        return [updatedSummaryItem!, ...prevSummaries];
+        return [updatedSummaryItem, ...prevSummaries];
       });
     }
   };
@@ -1416,7 +1482,7 @@ export default function App() {
     const newMovements: StockMovementEntry[] = [];
     const isFromMonitored = isMonitoredWarehouseBranch(transferInput.fromBranchCode);
 
-    transferInput.items.forEach((line, lineIndex) => {
+    (transferInput.items || []).forEach((line, lineIndex) => {
       const qty = Number(line.quantity) || 0;
       if (qty <= 0) return;
 
@@ -1924,7 +1990,10 @@ export default function App() {
 
   const pendingDisputesCount = disputes.filter((d) => d.status === 'PENDING').length;
   const pendingWarehouseAlertsCount = visibleAdminAlerts.filter(
-    (a) => a.category === 'STR' || a.category === 'LOW_STOCK'
+    (a) =>
+      a.category === 'STR' ||
+      a.category === 'LOW_STOCK' ||
+      a.category === 'NEAR_EXPIRY'
   ).length;
   const currentSheetsPayload = buildGoogleSheetsData(summaries, users, punches);
 
@@ -1974,8 +2043,8 @@ export default function App() {
     activeTab === 'overview' ||
     activeTab === 'dashboard' ||
     (currentUser?.role === 'ADMIN' && (activeTab === 'overview' || activeTab === 'logs')) ||
-    (currentUser?.role === 'BRANCH_MANAGER' && (activeTab === 'branch-logs' || activeTab === 'dtr-logs')) ||
-    (currentUser?.role === 'PAYROLL' && (activeTab === 'dtr-logs' || activeTab === 'daily-logs')) ||
+    (currentUser?.role === 'BRANCH_MANAGER' && activeTab === 'branch-logs') ||
+    (currentUser?.role === 'PAYROLL' && activeTab === 'daily-logs') ||
     ((currentUser?.role === 'STAFF' || currentUser?.role === 'SHIFT_MANAGER') && activeTab === 'my-punches');
 
   return (
@@ -2008,7 +2077,11 @@ export default function App() {
             setActiveTab={setActiveTab}
             pendingDisputesCount={pendingDisputesCount}
             pendingCtoCount={ctoRequests.filter((r) => r.status === 'PENDING').length}
-            pendingWarehouseCount={currentUser.role === 'ADMIN' ? pendingWarehouseAlertsCount : 0}
+            pendingWarehouseCount={
+              currentUser.role === 'ADMIN'
+                ? pendingWarehouseAlertsCount
+                : monitoredNearExpiryEntries.length
+            }
             onLogout={handleLogout}
             onSyncGoogleSheets={handleSyncGoogleSheets}
             isSyncing={isSyncing}
@@ -2016,10 +2089,10 @@ export default function App() {
           />
 
           {/* Main Content Workspace Area */}
-          <main className="flex-1 p-4 sm:p-6 lg:p-8 min-w-0 overflow-y-auto">
+          <main className="flex-1 p-4 sm:p-6 lg:p-8 min-w-0 overflow-y-auto print:p-0 print:overflow-visible">
             {/* Prominent User Role Banner - Shown strictly on Main Dashboard tab */}
             {roleInfo && isMainDashboardTab && (
-              <div className="mb-6 rounded-2xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 p-5 border-2 border-zinc-950 shadow-md text-zinc-950 relative overflow-hidden">
+              <div className="mb-6 rounded-2xl bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 p-5 border-2 border-zinc-950 shadow-md text-zinc-950 relative overflow-hidden print:hidden no-print">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
                   <div className="flex items-center gap-3.5">
                     <div className="w-12 h-12 rounded-xl bg-zinc-950 text-amber-400 flex items-center justify-center text-2xl shadow-sm border border-amber-300 shrink-0">

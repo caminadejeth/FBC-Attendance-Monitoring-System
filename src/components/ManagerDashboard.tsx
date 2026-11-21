@@ -12,7 +12,6 @@ import {
   BiometricPunch,
   WorkSchedule,
 } from '../types';
-import { PersonalPunchesTable } from './PersonalPunchesTable';
 import { WorkScheduleManager } from './WorkScheduleManager';
 import { ZktecoDatUploader } from './ZktecoDatUploader';
 import { CtoLeaveDashboard } from './CtoLeaveDashboard';
@@ -112,7 +111,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   activeTab,
 }) => {
   // Navigation sub-tab inside Manager Dashboard
-  const [managerTab, setManagerTab] = useState<'PERSONAL' | 'ZKTECO_UPLOAD' | 'ZKTECO_DAT' | 'BRANCH_LOGS' | 'DTR_LOGS' | 'SCHEDULES' | 'DISPUTES' | 'MY_CTO'>('BRANCH_LOGS');
+  const [managerTab, setManagerTab] = useState<'MY_DISPUTES' | 'ZKTECO_UPLOAD' | 'ZKTECO_DAT' | 'BRANCH_LOGS' | 'DTR_LOGS' | 'SCHEDULES' | 'DISPUTES' | 'MY_CTO'>('BRANCH_LOGS');
 
   // Sync activeTab prop from sidebar navigation
   React.useEffect(() => {
@@ -120,7 +119,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       setManagerTab('ZKTECO_DAT');
     } else if (activeTab === 'upload' || activeTab === 'zkteco-upload') {
       setManagerTab('ZKTECO_UPLOAD');
-    } else if (activeTab === 'dtr-logs') {
+    } else if (activeTab === 'dtr-logs' || activeTab === 'my-punches' || activeTab === 'personal') {
       setManagerTab('DTR_LOGS');
     } else if (activeTab === 'branch-logs' || activeTab === 'logs' || activeTab === 'overview') {
       setManagerTab('BRANCH_LOGS');
@@ -130,8 +129,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       setManagerTab('SCHEDULES');
     } else if (activeTab === 'my-cto') {
       setManagerTab('MY_CTO');
-    } else if (activeTab === 'my-punches' || activeTab === 'my-disputes' || activeTab === 'personal') {
-      setManagerTab('PERSONAL');
+    } else if (activeTab === 'my-disputes') {
+      setManagerTab('MY_DISPUTES');
     }
   }, [activeTab]);
 
@@ -234,10 +233,11 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       }
 
       const formattedDate = formatDateMDYY(s.date);
+      const q = searchTerm.toLowerCase();
       const matchesSearch =
-        s.employeeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        s.employeeId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        s.date.includes(searchTerm) ||
+        (s.employeeName || '').toLowerCase().includes(q) ||
+        (s.employeeId || '').toLowerCase().includes(q) ||
+        (s.date || '').includes(searchTerm) ||
         formattedDate.includes(searchTerm);
 
       const matchesStatus =
@@ -332,12 +332,12 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       'Clock In': s.firstIn || 'MISSING',
       'Clock Out': s.lastOut || 'MISSING',
       'Break Duration': `${s.totalBreakMinutes} mins`,
-      'Net Hours Worked': s.netHoursWorked,
+      'Net Hours Worked': s.netHoursWorked || 0,
       'Flexitime Target': '8.0 hrs',
-      'Undertime (Hrs)': s.undertimeHours,
+      'Undertime (Hrs)': s.undertimeHours || 0,
       'Potential CTO Eligible (Hrs)': s.ctoHoursEarned || 0,
       'Status': s.status,
-      'Anomalies / Remarks': s.anomalies.join(' | ') || 'None',
+      'Anomalies / Remarks': (s.anomalies || []).join(' | ') || 'None',
     }));
 
     const filename = `${currentUser.employeeId}_Manager_Attendance.xlsx`;
@@ -361,12 +361,12 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       'Clock In': s.firstIn || 'MISSING',
       'Clock Out': s.lastOut || 'MISSING',
       'Break Duration': `${s.totalBreakMinutes} mins`,
-      'Net Hours Worked': s.netHoursWorked,
+      'Net Hours Worked': s.netHoursWorked || 0,
       'Flexitime Target': '8.0 hrs',
-      'Undertime (Hrs)': s.undertimeHours,
+      'Undertime (Hrs)': s.undertimeHours || 0,
       'Potential CTO Eligible (Hrs)': s.ctoHoursEarned || 0,
       'Status': s.status,
-      'Anomalies': s.anomalies.join(' | ') || 'None',
+      'Anomalies': (s.anomalies || []).join(' | ') || 'None',
     }));
 
     const filename = `FBC_Branch_Attendance_${new Date().toISOString().split('T')[0]}.xlsx`;
@@ -452,7 +452,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                 />
               ) : (
                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-400 to-yellow-500 text-zinc-950 flex items-center justify-center font-black text-2xl shadow-xs border border-amber-300">
-                  {currentUser.name.substring(0, 2).toUpperCase()}
+                  {(currentUser.name || 'U').substring(0, 2).toUpperCase()}
                 </div>
               )}
 
@@ -1090,11 +1090,11 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                           </span>
                         ) : s.status === 'UNDERTIME' ? (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 whitespace-nowrap">
-                            ⚠ Undertime (-{s.undertimeHours.toFixed(1)}h)
+                            ⚠ Undertime (-{(Number(s.undertimeHours) || 0).toFixed(1)}h)
                           </span>
                         ) : s.status === 'OVERTIME' ? (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300 whitespace-nowrap">
-                            ★ OT (+{s.overtimeHours.toFixed(1)}h)
+                            ★ OT (+{(Number(s.overtimeHours) || 0).toFixed(1)}h)
                           </span>
                         ) : (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-800 border border-gray-300 whitespace-nowrap">
@@ -1133,8 +1133,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
                     <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] pt-1 border-t border-gray-100">
                       <div className="font-mono text-gray-600">
-                        Break <strong className="text-gray-800">{s.totalBreakMinutes}m</strong> · Net{' '}
-                        <strong className="text-[#2C3524]">{s.netHoursWorked.toFixed(1)} hrs</strong>
+                        Break <strong className="text-gray-800">{s.totalBreakMinutes || 0}m</strong> · Net{' '}
+                        <strong className="text-[#2C3524]">{(Number(s.netHoursWorked) || 0).toFixed(1)} hrs</strong>
                       </div>
                       <button
                         type="button"
@@ -1142,7 +1142,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                           const res = await showRemarkPromptAlert(
                             s.employeeName,
                             formatDateWithDay(s.date, s.weekday),
-                            s.anomalies.join(' | ')
+                            (s.anomalies || []).join(' | ')
                           );
                           if (res.isConfirmed && res.value !== undefined) {
                             if (onUpdateSummaryAnomaly) {
@@ -1156,9 +1156,9 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                         <MessageSquare className="w-3 h-3 text-[#656D4A]" /> Notes
                       </button>
                     </div>
-                    {s.anomalies.length > 0 && (
+                    {(s.anomalies || []).length > 0 && (
                       <div className="text-[11px] text-gray-600 bg-gray-50 px-2 py-1 rounded border border-gray-100">
-                        {s.anomalies.join(' | ')}
+                        {(s.anomalies || []).join(' | ')}
                       </div>
                     )}
                   </div>
@@ -1268,8 +1268,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                             'No Data'
                           )}
                         </td>
-                        <td className="p-3">{s.totalBreakMinutes}m</td>
-                        <td className="p-3 font-extrabold text-[#2C3524]">{s.netHoursWorked.toFixed(1)} hrs</td>
+                        <td className="p-3">{s.totalBreakMinutes || 0}m</td>
+                        <td className="p-3 font-extrabold text-[#2C3524]">{(Number(s.netHoursWorked) || 0).toFixed(1)} hrs</td>
                         <td className="p-3">
                           {isAbsent ? (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
@@ -1285,11 +1285,11 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                             </span>
                           ) : s.status === 'UNDERTIME' ? (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                              ⚠ Undertime (-{s.undertimeHours.toFixed(1)}h)
+                              ⚠ Undertime (-{(Number(s.undertimeHours) || 0).toFixed(1)}h)
                             </span>
                           ) : s.status === 'OVERTIME' ? (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300">
-                              ★ Overtime (+{s.overtimeHours.toFixed(1)}h)
+                              ★ Overtime (+{(Number(s.overtimeHours) || 0).toFixed(1)}h)
                             </span>
                           ) : (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-800 border border-gray-300">
@@ -1299,15 +1299,15 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                         </td>
                         <td className="p-3 text-[11px]">
                           <div className="flex items-center justify-between gap-2 min-w-[200px]">
-                            <span className="text-gray-600 font-medium truncate max-w-[180px]" title={s.anomalies.length > 0 ? s.anomalies.join(' | ') : 'Normal Shift'}>
-                              {s.anomalies.length > 0 ? s.anomalies.join(' | ') : 'Normal Shift'}
+                            <span className="text-gray-600 font-medium truncate max-w-[180px]" title={(s.anomalies || []).length > 0 ? (s.anomalies || []).join(' | ') : 'Normal Shift'}>
+                              {(s.anomalies || []).length > 0 ? (s.anomalies || []).join(' | ') : 'Normal Shift'}
                             </span>
                             <button
                               onClick={async () => {
                                 const res = await showRemarkPromptAlert(
                                   s.employeeName,
                                   formatDateWithDay(s.date, s.weekday),
-                                  s.anomalies.join(' | ')
+                                  (s.anomalies || []).join(' | ')
                                 );
                                 if (res.isConfirmed && res.value !== undefined) {
                                   if (onUpdateSummaryAnomaly) {
@@ -1408,7 +1408,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                               Target Date: <strong className="text-zinc-950">{req.date}</strong>
                             </span>
                             <span className="font-mono font-black text-amber-900 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
-                              {isCredit ? '+' : '-'}{req.hoursRequested.toFixed(1)} hrs CTO
+                              {isCredit ? '+' : '-'}{(Number(req.hoursRequested) || 0).toFixed(1)} hrs CTO
                             </span>
                             <span className="text-gray-500 text-[10px]">
                               Submitted: {formatRealtimeTimestamp(req.submittedAt)}
@@ -1518,23 +1518,24 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
         );
       })()}
 
-      {/* TAB 3: PERSONAL PUNCHES & DISPUTES */}
-      {managerTab === 'PERSONAL' && (
+      {/* TAB 3: MY DISPUTES */}
+      {managerTab === 'MY_DISPUTES' && (
         <div className="space-y-6 animate-in fade-in">
-          {/* PERSONAL PUNCHES TABLE WITH CTO & DATE RANGE */}
-          <PersonalPunchesTable
-            currentUser={currentUser}
-            summaries={summaries}
-            ctoRequests={ctoRequests}
-            ctoAdjustments={ctoAdjustments}
-            onSubmitCtoRequest={onSubmitCtoRequest}
-            onUpdateSummaryAnomaly={onUpdateSummaryAnomaly}
-            onSubmitDispute={onSubmitDispute}
-          />
-
           {/* MY DISPUTES TRACKER */}
           <div className="bg-white rounded-2xl border border-[#D3D8C8] p-6 shadow-xs space-y-4">
-            <h3 className="text-base font-bold text-[#2C3524]">My Dispute & Adjustment Tickets</h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-[#2C3524]">My Dispute & Adjustment Tickets</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Submit and track your missing punch or time adjustment requests.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAdjustmentModal(true)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-950 font-black text-xs uppercase tracking-wider border border-zinc-950 shadow-xs cursor-pointer whitespace-nowrap self-start sm:self-auto"
+              >
+                <PlusCircle className="w-4 h-4" /> New Time Adjustment Form
+              </button>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {myDisputes.length === 0 ? (
                 <div className="md:col-span-2 p-8 text-center text-gray-400">

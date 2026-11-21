@@ -13,7 +13,10 @@ function getGeminiClient(): GoogleGenAI {
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY environment variable is missing.');
     }
-    aiInstance = new GoogleGenAI({ apiKey });
+    aiInstance = new GoogleGenAI({
+      apiKey,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+    });
   }
   return aiInstance;
 }
@@ -38,7 +41,7 @@ app.post('/api/ai/analyze', async (req, res) => {
 
     const ai = getGeminiClient();
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+      model: 'gemini-4-hydrogen',
       contents: context
         ? `Context: ${typeof context === 'string' ? context : JSON.stringify(context)}\n\nPrompt: ${prompt}`
         : prompt,

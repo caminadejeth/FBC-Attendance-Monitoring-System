@@ -7,7 +7,6 @@ import {
   FileText,
   AlertCircle,
   Users,
-  Calculator,
   Award,
   Clock,
   LogOut,
@@ -247,12 +246,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             description: 'Old model .dat file parser',
           },
           {
-            id: 'my-punches',
-            label: 'My Personal Punches',
-            icon: UserCheck,
-            description: 'My 8h shift attendance log',
-          },
-          {
             id: 'my-disputes',
             label: 'File / View Disputes',
             icon: AlertCircle,
@@ -383,12 +376,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             description: 'Submit punch adjustments',
           },
           {
-            id: 'my-cto',
-            label: 'CTO Leave Requests',
-            icon: Award,
-            description: 'Compensatory Time Off balance & leave requests',
-          },
-          {
             id: 'warehouse-inventory',
             label: 'Warehouse & STR',
             icon: Package,
@@ -416,7 +403,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="md:hidden bg-zinc-950 text-white p-3.5 flex items-center justify-between border-b border-amber-400/40">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-amber-400 text-zinc-950 flex items-center justify-center font-black text-xs">
-            {currentUser.name.substring(0, 2).toUpperCase()}
+            {(currentUser.name || 'U').substring(0, 2).toUpperCase()}
           </div>
           <div>
             <div className="text-xs font-black">{currentUser.name}</div>
@@ -491,7 +478,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   />
                 ) : (
                   <div className="w-10 h-10 rounded-xl bg-amber-400 text-zinc-950 font-black text-sm flex items-center justify-center border-2 border-amber-300 shrink-0 shadow-sm">
-                    {currentUser.name.substring(0, 2).toUpperCase()}
+                    {(currentUser.name || 'U').substring(0, 2).toUpperCase()}
                   </div>
                 )}
                 <div className="min-w-0 flex-1">
@@ -524,7 +511,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           ) : (
             <div className="flex justify-center py-2" title={`${currentUser.name} (${currentUser.role})`}>
               <div className="w-10 h-10 rounded-xl bg-amber-400 text-zinc-950 font-black text-sm flex items-center justify-center border-2 border-amber-300 shadow-sm">
-                {currentUser.name.substring(0, 2).toUpperCase()}
+                {(currentUser.name || 'U').substring(0, 2).toUpperCase()}
               </div>
             </div>
           )}

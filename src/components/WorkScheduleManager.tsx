@@ -181,13 +181,14 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
       const branchMatch =
         selectedBranch === 'ALL' || hasActiveWeekdayScheduleForSelectedBranch;
 
+      const q = searchTerm.toLowerCase();
       const searchMatch =
-        sch.employeeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        sch.employeeId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        sch.shiftName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        sch.department.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        assignedBranch.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        dailyBranches.some((b) => b.toLowerCase().includes(searchTerm.toLowerCase()));
+        (sch.employeeName || '').toLowerCase().includes(q) ||
+        (sch.employeeId || '').toLowerCase().includes(q) ||
+        (sch.shiftName || '').toLowerCase().includes(q) ||
+        (sch.department || '').toLowerCase().includes(q) ||
+        (assignedBranch || '').toLowerCase().includes(q) ||
+        dailyBranches.some((b) => (b || '').toLowerCase().includes(q));
 
       return deptMatch && branchMatch && searchMatch;
     });
@@ -726,7 +727,7 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
                             />
                           ) : (
                             <div className="w-8 h-8 rounded-lg bg-[#656D4A] text-white font-bold flex items-center justify-center text-[11px] shrink-0">
-                              {sch.employeeName.substring(0, 2).toUpperCase()}
+                              {(sch.employeeName || 'U').substring(0, 2).toUpperCase()}
                             </div>
                           )}
                           <div className="min-w-0">
@@ -900,7 +901,7 @@ export const WorkScheduleManager: React.FC<WorkScheduleManagerProps> = ({
                                 />
                               ) : (
                                 <div className="w-7 h-7 rounded-lg bg-[#656D4A] text-white font-bold flex items-center justify-center text-[10px] shrink-0">
-                                  {sch.employeeName.substring(0, 2).toUpperCase()}
+                                  {(sch.employeeName || 'U').substring(0, 2).toUpperCase()}
                                 </div>
                               )}
                               <div className="min-w-0">

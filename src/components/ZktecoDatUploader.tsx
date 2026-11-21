@@ -283,7 +283,7 @@ export const ZktecoDatUploader: React.FC<ZktecoDatUploaderProps> = ({
                     <td className="py-2.5 px-3 font-mono text-zinc-600">{s.breakOut || '--:--'}</td>
                     <td className="py-2.5 px-3 font-mono text-zinc-600">{s.breakIn || '--:--'}</td>
                     <td className="py-2.5 px-3 font-mono text-amber-800 font-bold">{s.lastOut || '--:--'}</td>
-                    <td className="py-2.5 px-3 font-mono font-bold text-center">{s.netHoursWorked.toFixed(1)} hrs</td>
+                    <td className="py-2.5 px-3 font-mono font-bold text-center">{(Number(s.netHoursWorked) || 0).toFixed(1)} hrs</td>
                     <td className="py-2.5 px-3 text-center">
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${

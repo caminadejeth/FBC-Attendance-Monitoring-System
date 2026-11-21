@@ -293,6 +293,7 @@ export interface WarehouseInventoryItem {
   branchName: string;
   quantity: number;
   reorderLevel?: number;
+  expiryDate?: string; // ISO YYYY-MM-DD
   updatedAt: string;
   updatedBy?: string;
 }
