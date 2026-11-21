@@ -109,6 +109,7 @@ interface WarehouseInventoryDashboardProps {
     cancelReasons?: Record<string, string>
   ) => Promise<void> | void;
   onMarkStockTransferReceived: (transferId: string) => Promise<void> | void;
+  onDeleteStockTransfer?: (transferId: string) => Promise<void> | void;
   onAddLedgerEntry: (
     entry: Omit<StockMovementEntry, 'id' | 'timestamp'>
   ) => Promise<void> | void;
@@ -153,6 +154,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   onCreateStockTransfer,
   onReviewStockTransfer,
   onMarkStockTransferReceived,
+  onDeleteStockTransfer,
   onAddLedgerEntry,
   onUpdateLedgerEntry,
   onDeleteLedgerEntry,
@@ -278,6 +280,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
   // History, Print, Inline Min & STR/Ledger Modal State
   const [strSearch, setStrSearch] = useState<string>('');
+  const [strStartDate, setStrStartDate] = useState<string>('');
+  const [strEndDate, setStrEndDate] = useState<string>('');
   const [printableTransfer, setPrintableTransfer] =
     useState<StockTransferRequisition | null>(null);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
@@ -658,6 +662,9 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   const filteredTransfers = useMemo(() => {
     const q = strSearch.toLowerCase().trim();
     return stockTransfers.filter((trf) => {
+      const trfDate = (trf.date || '').slice(0, 10);
+      if (strStartDate && (!trfDate || trfDate < strStartDate)) return false;
+      if (strEndDate && (!trfDate || trfDate > strEndDate)) return false;
       if (!q) return true;
       const items = Array.isArray(trf.items) ? trf.items : [];
       return (
@@ -670,7 +677,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         items.some((i) => (i.description || '').toLowerCase().includes(q))
       );
     });
-  }, [stockTransfers, strSearch]);
+  }, [stockTransfers, strSearch, strStartDate, strEndDate]);
 
   // Google Sheet Flattened Rows
   const googleSheetRows = useMemo(() => {
@@ -2194,6 +2201,27 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       } catch (err) {
         console.error('Failed marking STR received:', err);
         showErrorAlert('Update Failed', 'Could not mark STR as received. Please try again.');
+      }
+    }
+  };
+
+  const handleConfirmDeleteStr = async (trf: StockTransferRequisition) => {
+    if (!onDeleteStockTransfer || !isSuperAdmin) return;
+    const result = await yellowCabSwal.fire({
+      icon: 'warning',
+      title: `Delete STR ${trf.strRefNumber}?`,
+      text: `This will permanently delete STR ${trf.strRefNumber} (${trf.fromBranchName} -> ${trf.toBranchName}), remove its linked Stock Movement Ledger entries, and reverse any stock deductions/additions applied to monitored branch inventory.`,
+      showCancelButton: true,
+      confirmButtonText: 'Delete STR',
+      cancelButtonText: 'Cancel',
+    });
+    if (result.isConfirmed) {
+      try {
+        await onDeleteStockTransfer(trf.id);
+        showActionSuccessToast(`Deleted STR ${trf.strRefNumber} and reversed linked stock.`);
+      } catch (err) {
+        console.error('Failed deleting STR:', err);
+        showErrorAlert('Delete Failed', 'Could not delete STR record. Please try again.');
       }
     }
   };
@@ -3945,7 +3973,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                   </span>
                 )}
               </div>
-              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
                 <div className="relative flex-1 sm:flex-initial sm:min-w-[200px]">
                   <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
                   <input
@@ -3956,13 +3984,55 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                     className="w-full pl-8 pr-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
                   />
                 </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <label className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-zinc-600">
+                    <span>From</span>
+                    <input
+                      id="str-filter-start-date"
+                      type="date"
+                      value={strStartDate}
+                      max={strEndDate || undefined}
+                      onChange={(e) => setStrStartDate(e.target.value)}
+                      aria-label="Filter STR history from date"
+                      className="px-2 py-1 rounded-lg border border-zinc-300 bg-white text-xs font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    />
+                  </label>
+                  <label className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-zinc-600">
+                    <span>To</span>
+                    <input
+                      id="str-filter-end-date"
+                      type="date"
+                      value={strEndDate}
+                      min={strStartDate || undefined}
+                      onChange={(e) => setStrEndDate(e.target.value)}
+                      aria-label="Filter STR history to date"
+                      className="px-2 py-1 rounded-lg border border-zinc-300 bg-white text-xs font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    />
+                  </label>
+                  {(strSearch || strStartDate || strEndDate) && (
+                    <button
+                      id="btn-clear-str-filters"
+                      type="button"
+                      onClick={() => {
+                        setStrSearch('');
+                        setStrStartDate('');
+                        setStrEndDate('');
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] font-bold cursor-pointer transition-colors"
+                      title="Clear search and date range filters"
+                    >
+                      <X className="w-3 h-3" />
+                      <span>Clear</span>
+                    </button>
+                  )}
+                </div>
                 <button
                   id="btn-export-str-history-excel"
                   type="button"
                   disabled={filteredTransfers.length === 0}
                   onClick={() => handleExportStrHistoryExcel(filteredTransfers)}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-40 transition-colors"
-                  title="Export all STR history records and line items to Excel (.xlsx)"
+                  title="Export filtered STR history records and line items to Excel (.xlsx)"
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5" />
                   <span>Export Excel ({filteredTransfers.length})</span>
@@ -3972,7 +4042,9 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
             {filteredTransfers.length === 0 ? (
               <div className="p-6 text-center text-xs text-zinc-500">
-                No Stock Transfer Requisitions recorded yet.
+                {strSearch || strStartDate || strEndDate
+                  ? 'No Stock Transfer Requisitions match your search or date range.'
+                  : 'No Stock Transfer Requisitions recorded yet.'}
               </div>
             ) : (
               <>
@@ -4101,9 +4173,9 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           </div>
                         </div>
 
-                        {isPending && (
+                        {(isPending || (isSuperAdmin && Boolean(onDeleteStockTransfer))) && (
                           <div className="flex flex-wrap items-center justify-end gap-1.5 pt-2 border-t border-zinc-200/80">
-                            {isSuperAdmin && !trf.reviewedBy && (
+                            {isPending && isSuperAdmin && !trf.reviewedBy && (
                               <button
                                 type="button"
                                 onClick={() => handleConfirmReviewStr(trf)}
@@ -4112,13 +4184,25 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                 Review Items
                               </button>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => handleConfirmReceiveStr(trf)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
-                            >
-                              <Check className="w-3 h-3" /> Mark Received
-                            </button>
+                            {isPending && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmReceiveStr(trf)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
+                              >
+                                <Check className="w-3 h-3" /> Mark Received
+                              </button>
+                            )}
+                            {isSuperAdmin && onDeleteStockTransfer && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmDeleteStr(trf)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
+                                title="Delete STR record and reverse linked stock"
+                              >
+                                <Trash2 className="w-3 h-3" /> Delete
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -4282,6 +4366,16 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                       </span>
                                     )}
                                   </span>
+                                )}
+                                {isSuperAdmin && onDeleteStockTransfer && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleConfirmDeleteStr(trf)}
+                                    className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-black uppercase cursor-pointer"
+                                    title="Delete STR record and reverse linked stock"
+                                  >
+                                    <Trash2 className="w-3 h-3" /> Delete
+                                  </button>
                                 )}
                               </div>
                             </td>

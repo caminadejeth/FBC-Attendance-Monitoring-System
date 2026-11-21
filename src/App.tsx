@@ -2314,6 +2314,102 @@ export default function App() {
     );
   };
 
+  const handleDeleteStockTransfer = async (transferId: string) => {
+    if (currentUser?.role !== 'ADMIN') return;
+    const target = stockTransfers.find((t) => t.id === transferId);
+    if (!target) return;
+
+    const nowIso = new Date().toISOString();
+    const performer = currentUser?.name || 'Super Admin';
+    const linkedMovements = stockMovements.filter(
+      (m) =>
+        m.refNumber === target.strRefNumber &&
+        m.transferNumber === target.transferNumber
+    );
+
+    const workingInventory = [...warehouseItems];
+    const itemsToSaveMap = new Map<string, WarehouseInventoryItem>();
+    const isFromMonitored = isMonitoredWarehouseBranch(target.fromBranchCode);
+    const isToMonitored = isMonitoredWarehouseBranch(target.toBranchCode);
+
+    // Reverse linked stock adjustments so deleting an STR keeps branch balances accurate
+    linkedMovements.forEach((mov) => {
+      if (mov.movementType === 'TRANSFER_OUT' && mov.status !== 'CANCELLED' && isFromMonitored) {
+        const deductedQty = Math.max(
+          0,
+          (Number(mov.previousQty) || 0) - (Number(mov.newQty) || 0)
+        );
+        if (deductedQty > 0) {
+          const idx = workingInventory.findIndex(
+            (i) =>
+              (mov.itemId && i.id === mov.itemId && i.branchCode === target.fromBranchCode) ||
+              (i.branchCode === target.fromBranchCode &&
+                (i.description || '').toLowerCase() === (mov.description || '').toLowerCase() &&
+                ((i.batchNo || '').toLowerCase() === (mov.batchNo || '').toLowerCase() ||
+                  (!(i.batchNo || '').trim() && (mov.batchNo || '').toLowerCase() === 'general')))
+          );
+          if (idx >= 0) {
+            const cur = workingInventory[idx];
+            const restored: WarehouseInventoryItem = {
+              ...cur,
+              quantity: (Number(cur.quantity) || 0) + deductedQty,
+              updatedAt: nowIso,
+              updatedBy: performer,
+            };
+            workingInventory[idx] = restored;
+            itemsToSaveMap.set(restored.id, restored);
+          }
+        }
+      } else if (mov.movementType === 'TRANSFER_IN' && mov.status === 'RECEIVED' && isToMonitored) {
+        const addedQty = Math.max(
+          0,
+          (Number(mov.newQty) || 0) - (Number(mov.previousQty) || 0)
+        );
+        if (addedQty > 0) {
+          const idx = workingInventory.findIndex(
+            (i) =>
+              (mov.itemId && i.id === mov.itemId && i.branchCode === target.toBranchCode) ||
+              (i.branchCode === target.toBranchCode &&
+                (i.description || '').toLowerCase() === (mov.description || '').toLowerCase() &&
+                ((i.batchNo || '').toLowerCase() === (mov.batchNo || '').toLowerCase() ||
+                  (!(i.batchNo || '').trim() && (mov.batchNo || '').toLowerCase() === 'general')))
+          );
+          if (idx >= 0) {
+            const cur = workingInventory[idx];
+            const reverted: WarehouseInventoryItem = {
+              ...cur,
+              quantity: Math.max(0, (Number(cur.quantity) || 0) - addedQty),
+              updatedAt: nowIso,
+              updatedBy: performer,
+            };
+            workingInventory[idx] = reverted;
+            itemsToSaveMap.set(reverted.id, reverted);
+          }
+        }
+      }
+    });
+
+    if (itemsToSaveMap.size > 0) {
+      await saveDocuments('warehouseItems', Array.from(itemsToSaveMap.values()));
+      setWarehouseItems(workingInventory);
+    }
+
+    if (linkedMovements.length > 0) {
+      const linkedIds = new Set(linkedMovements.map((m) => m.id));
+      await Promise.all(linkedMovements.map((m) => removeDocument('stockMovements', m.id)));
+      setStockMovements((prev) => prev.filter((m) => !linkedIds.has(m.id)));
+    }
+
+    await removeDocument('stockTransfers', transferId);
+    setStockTransfers((prev) => prev.filter((t) => t.id !== transferId));
+
+    logActivity(
+      'SYSTEM_EVENT',
+      `Deleted STR ${target.strRefNumber} (${target.fromBranchName} → ${target.toBranchName}, status: ${target.status}).`,
+      'Warehouse'
+    );
+  };
+
   // Super Admin Stock Movement Ledger CRUD Handlers
   const handleAddLedgerEntry = async (
     entryData: Omit<StockMovementEntry, 'id' | 'timestamp'>
@@ -2694,6 +2790,7 @@ export default function App() {
                 onCreateStockTransfer={handleCreateStockTransfer}
                 onReviewStockTransfer={handleApproveReviewStockTransfer}
                 onMarkStockTransferReceived={handleMarkStockTransferReceived}
+                onDeleteStockTransfer={handleDeleteStockTransfer}
                 onAddLedgerEntry={handleAddLedgerEntry}
                 onUpdateLedgerEntry={handleUpdateLedgerEntry}
                 onDeleteLedgerEntry={handleDeleteLedgerEntry}
