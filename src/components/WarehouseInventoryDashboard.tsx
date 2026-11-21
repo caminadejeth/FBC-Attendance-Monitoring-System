@@ -755,6 +755,139 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     showExportToast(filename);
   };
 
+  const handleExportStrHistoryExcel = (transfersSubset?: StockTransferRequisition[]) => {
+    const source = transfersSubset || filteredTransfers;
+    if (source.length === 0) {
+      showErrorAlert(
+        'No STR History to Export',
+        'Create at least one Stock Transfer Requisition (STR) before exporting.'
+      );
+      return;
+    }
+
+    const summaryRows = source.map((trf) => {
+      const safeLines = Array.isArray(trf.items) ? trf.items : [];
+      const activeItems = safeLines.filter((i) => i.itemStatus !== 'CANCELLED');
+      const cancelledCount = safeLines.length - activeItems.length;
+      const totalActiveQty = activeItems.reduce(
+        (sum, line) => sum + (Number(line.quantity) || 0),
+        0
+      );
+      const totalActiveAmount = activeItems.reduce(
+        (sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.unitPrice) || 0),
+        0
+      );
+
+      return {
+        Date: trf.date || '',
+        'STR Ref #': trf.strRefNumber || '',
+        'Transfer #': trf.transferNumber || '',
+        Status: trf.status || 'PENDING',
+        'From Branch': trf.fromBranchName || trf.fromBranchCode || '',
+        'To Branch': trf.toBranchName || trf.toBranchCode || '',
+        'Items Summary': activeItems
+          .map((i) => `${i.description} (${i.quantity} ${i.uom})`)
+          .join('; '),
+        'Active Lines': activeItems.length,
+        'Cancelled Lines': cancelledCount,
+        'Total Active Qty': totalActiveQty,
+        'Total Value (PHP)': Number(totalActiveAmount.toFixed(2)),
+        'Prepared By': trf.preparedBy || '',
+        'Reviewed By': trf.reviewedBy || '',
+        'Reviewed At': trf.reviewedAt ? formatStrDateTime(trf.reviewedAt) : '',
+        'Received By': trf.receivedBy || '',
+        'Received At': trf.receivedAt ? formatStrDateTime(trf.receivedAt) : '',
+        Remarks: trf.remarks || '',
+      };
+    });
+
+    const lineItemRows: Array<Record<string, string | number>> = [];
+    source.forEach((trf) => {
+      const safeLines = Array.isArray(trf.items) ? trf.items : [];
+      safeLines.forEach((line) => {
+        const qty = Number(line.quantity) || 0;
+        const price = Number(line.unitPrice) || 0;
+        lineItemRows.push({
+          Date: trf.date || '',
+          'STR Ref #': trf.strRefNumber || '',
+          'Transfer #': trf.transferNumber || '',
+          'STR Status': trf.status || 'PENDING',
+          'From Location': trf.fromBranchName || trf.fromBranchCode || '',
+          'To Location': trf.toBranchName || trf.toBranchCode || '',
+          'Item Code': line.itemCode || '',
+          Description: line.description || '',
+          Category: line.category || '',
+          'Batch / Exp': line.batchNo || '',
+          UOM: line.uom || '',
+          Price: price,
+          Qty: qty,
+          'Line Total': Number((qty * price).toFixed(2)),
+          'Item Status': line.itemStatus || (trf.status === 'CANCELLED' ? 'CANCELLED' : 'ACTIVE'),
+          'Cancel Reason': line.cancelReason || '',
+          'Prepared By': trf.preparedBy || '',
+          'Reviewed By': trf.reviewedBy || '',
+          'Received By': trf.receivedBy || '',
+          Remarks: trf.remarks || '',
+        });
+      });
+    });
+
+    const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
+    summarySheet['!cols'] = [
+      { wch: 12 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 12 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 42 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 28 },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, summarySheet, 'STR History Summary');
+
+    if (lineItemRows.length > 0) {
+      const itemsSheet = XLSX.utils.json_to_sheet(lineItemRows);
+      itemsSheet['!cols'] = [
+        { wch: 12 },
+        { wch: 16 },
+        { wch: 18 },
+        { wch: 12 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 14 },
+        { wch: 36 },
+        { wch: 22 },
+        { wch: 16 },
+        { wch: 10 },
+        { wch: 10 },
+        { wch: 8 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 24 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 28 },
+      ];
+      XLSX.utils.book_append_sheet(workbook, itemsSheet, 'STR Line Items');
+    }
+
+    const filename = `FBC_STR_History_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(workbook, filename);
+    showExportToast(filename);
+  };
+
   const handleCopyGoogleSheetTsv = async () => {
     if (googleSheetRows.length === 0) {
       showErrorAlert(
@@ -3812,15 +3945,28 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                   </span>
                 )}
               </div>
-              <div className="relative w-full sm:w-auto sm:min-w-[200px]">
-                <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={strSearch}
-                  onChange={(e) => setStrSearch(e.target.value)}
-                  placeholder="Search STR #, branch, item..."
-                  className="w-full pl-8 pr-2.5 py-1 rounded-lg border border-zinc-300 bg-white text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                />
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                <div className="relative flex-1 sm:flex-initial sm:min-w-[200px]">
+                  <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={strSearch}
+                    onChange={(e) => setStrSearch(e.target.value)}
+                    placeholder="Search STR #, branch, item..."
+                    className="w-full pl-8 pr-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+                <button
+                  id="btn-export-str-history-excel"
+                  type="button"
+                  disabled={filteredTransfers.length === 0}
+                  onClick={() => handleExportStrHistoryExcel(filteredTransfers)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-40 transition-colors"
+                  title="Export all STR history records and line items to Excel (.xlsx)"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Export Excel ({filteredTransfers.length})</span>
+                </button>
               </div>
             </div>
 
@@ -3955,17 +4101,17 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center justify-end gap-1.5 pt-2 border-t border-zinc-200/80">
-                          {isSuperAdmin && isPending && !trf.reviewedBy && (
-                            <button
-                              type="button"
-                              onClick={() => handleConfirmReviewStr(trf)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
-                            >
-                              Review Items
-                            </button>
-                          )}
-                          {isPending && (
+                        {isPending && (
+                          <div className="flex flex-wrap items-center justify-end gap-1.5 pt-2 border-t border-zinc-200/80">
+                            {isSuperAdmin && !trf.reviewedBy && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmReviewStr(trf)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
+                              >
+                                Review Items
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => handleConfirmReceiveStr(trf)}
@@ -3973,15 +4119,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                             >
                               <Check className="w-3 h-3" /> Mark Received
                             </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handleExportGoogleSheetXlsx([trf])}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-bold whitespace-nowrap cursor-pointer"
-                          >
-                            <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
-                          </button>
-                        </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -3998,7 +4137,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <th className="px-3 py-2 font-black">From → To</th>
                         <th className="px-3 py-2 font-black">Items</th>
                         <th className="px-3 py-2 font-black">Signatories & Receipt Details</th>
-                        <th className="px-3 py-2 font-black text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-200">
@@ -4086,33 +4224,55 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                 </button>
                               </div>
                             </td>
-                            <td className="px-3 py-2 text-[11px] text-zinc-700 space-y-0.5">
-                              <div>
-                                Prep: <strong>{trf.preparedBy}</strong> · Rev:{' '}
-                                {trf.reviewedBy ? (
-                                  <strong className="text-zinc-900">
-                                    {trf.reviewedBy}
-                                    {trf.reviewedAt && (
-                                      <span className="ml-1 font-mono font-normal text-[10px] text-zinc-500">
-                                        ({formatStrDateTime(trf.reviewedAt)})
-                                      </span>
-                                    )}
-                                  </strong>
-                                ) : (
-                                  <span className="text-amber-700 italic">
-                                    Awaiting Super Admin review
-                                  </span>
+                            <td className="px-3 py-2 text-[11px] text-zinc-700 space-y-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span>
+                                  Prep: <strong>{trf.preparedBy}</strong> · Rev:{' '}
+                                  {trf.reviewedBy ? (
+                                    <strong className="text-zinc-900">
+                                      {trf.reviewedBy}
+                                      {trf.reviewedAt && (
+                                        <span className="ml-1 font-mono font-normal text-[10px] text-zinc-500">
+                                          ({formatStrDateTime(trf.reviewedAt)})
+                                        </span>
+                                      )}
+                                    </strong>
+                                  ) : (
+                                    <span className="text-amber-700 italic">
+                                      Awaiting Super Admin review
+                                    </span>
+                                  )}
+                                </span>
+                                {isSuperAdmin && isPending && !trf.reviewedBy && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleConfirmReviewStr(trf)}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase cursor-pointer"
+                                    title="Check requested items & cancel unavailable stock (Super Admin only)"
+                                  >
+                                    Review Items
+                                  </button>
                                 )}
                               </div>
-                              <div>
+                              <div className="flex flex-wrap items-center gap-1.5">
                                 {isCancelled ? (
                                   <span className="text-rose-700 font-semibold">
                                     Cancelled during Super Admin review
                                   </span>
                                 ) : isPending ? (
-                                  <span className="text-amber-700 font-semibold">
-                                    Recv: Pending receipt confirmation
-                                  </span>
+                                  <>
+                                    <span className="text-amber-700 font-semibold">
+                                      Recv: Pending receipt confirmation
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleConfirmReceiveStr(trf)}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase cursor-pointer"
+                                      title={`Mark as Received by ${currentUser.name}`}
+                                    >
+                                      <Check className="w-3 h-3" /> Mark Received
+                                    </button>
+                                  </>
                                 ) : (
                                   <span className="text-emerald-800">
                                     Recv: <strong>{trf.receivedBy}</strong>
@@ -4123,38 +4283,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                     )}
                                   </span>
                                 )}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 text-right whitespace-nowrap">
-                              <div className="inline-flex items-center gap-1">
-                                {isSuperAdmin && isPending && !trf.reviewedBy && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleConfirmReviewStr(trf)}
-                                    className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase cursor-pointer"
-                                    title="Check requested items & cancel unavailable stock (Super Admin only)"
-                                  >
-                                    Review Items
-                                  </button>
-                                )}
-                                {isPending && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleConfirmReceiveStr(trf)}
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase cursor-pointer"
-                                    title={`Mark as Received by ${currentUser.name}`}
-                                  >
-                                    <Check className="w-3 h-3" /> Mark Received
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => handleExportGoogleSheetXlsx([trf])}
-                                  className="p-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 cursor-pointer"
-                                  title="Export STR to Excel"
-                                >
-                                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                                </button>
                               </div>
                             </td>
                           </tr>
