@@ -23,6 +23,7 @@ import {
   KeyRound,
   History,
   Package,
+  Ticket,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -32,6 +33,7 @@ interface SidebarProps {
   pendingDisputesCount?: number;
   pendingCtoCount?: number;
   pendingWarehouseCount?: number;
+  pendingTicketsCount?: number;
   onLogout: () => void;
   onSyncGoogleSheets?: () => void;
   isSyncing?: boolean;
@@ -45,6 +47,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   pendingDisputesCount = 0,
   pendingCtoCount = 0,
   pendingWarehouseCount = 0,
+  pendingTicketsCount = 0,
   onLogout,
   onSyncGoogleSheets,
   isSyncing = false,
@@ -191,6 +194,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             description: 'Employee punch dispute queue',
           },
           {
+            id: 'cto-management',
+            label: 'CTO Leave & Requests',
+            icon: Award,
+            badge: pendingCtoCount > 0 ? pendingCtoCount : undefined,
+            description: 'Edit, approve & delete CTO requests',
+          },
+          {
             id: 'users',
             label: 'User Accounts',
             icon: Users,
@@ -202,6 +212,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             icon: Package,
             badge: pendingWarehouseCount > 0 ? pendingWarehouseCount : undefined,
             description: 'Branch stock & 1/4 STR transfers',
+          },
+          {
+            id: 'store-tickets',
+            label: 'Store Tickets',
+            icon: Ticket,
+            badge: pendingTicketsCount > 0 ? pendingTicketsCount : undefined,
+            description: 'Branch concerns & admin requests',
           },
           {
             id: 'activity-logs',
@@ -263,6 +280,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             icon: Package,
             description: 'Branch stock & 1/4 STR transfers',
           },
+          {
+            id: 'store-tickets',
+            label: 'Store Tickets',
+            icon: Ticket,
+            badge: pendingTicketsCount > 0 ? pendingTicketsCount : undefined,
+            description: 'Submit & track branch concerns',
+          },
         ];
 
       case 'PAYROLL':
@@ -318,6 +342,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             icon: Package,
             description: 'Branch stock & 1/4 STR transfers',
           },
+          {
+            id: 'store-tickets',
+            label: 'Store Tickets',
+            icon: Ticket,
+            badge: pendingTicketsCount > 0 ? pendingTicketsCount : undefined,
+            description: 'Submit & view store concern tickets',
+          },
         ];
 
       case 'SHIFT_MANAGER':
@@ -352,6 +383,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             icon: Package,
             description: 'Branch stock & 1/4 STR transfers',
           },
+          {
+            id: 'store-tickets',
+            label: 'Store Tickets',
+            icon: Ticket,
+            badge: pendingTicketsCount > 0 ? pendingTicketsCount : undefined,
+            description: 'Submit & view store concern tickets',
+          },
         ];
 
       case 'STAFF':
@@ -380,6 +418,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             label: 'Warehouse & STR',
             icon: Package,
             description: 'Branch stock & 1/4 STR transfers',
+          },
+          {
+            id: 'store-tickets',
+            label: 'Store Tickets',
+            icon: Ticket,
+            badge: pendingTicketsCount > 0 ? pendingTicketsCount : undefined,
+            description: 'Submit & view store concern tickets',
           },
         ];
     }
@@ -597,37 +642,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="px-2 text-[10px] font-black uppercase text-amber-400/80 tracking-wider">
                 SYSTEM ACTIONS
               </div>
-            )}
-
-            {/* ZKTeco Quick Upload Button for Admin, Branch Manager, Payroll */}
-            {(currentUser.role === 'ADMIN' ||
-              currentUser.role === 'BRANCH_MANAGER' ||
-              currentUser.role === 'PAYROLL') && (
-              <>
-                <button
-                  id="sidebar-quick-upload-btn"
-                  onClick={() => handleNavClick('upload')}
-                  title={isCollapsed ? 'Upload ZKTeco Excel' : undefined}
-                  className={`w-full flex items-center ${
-                    isCollapsed ? 'justify-center p-2.5' : 'gap-2 px-3 py-2'
-                  } rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-zinc-950 text-xs font-black uppercase tracking-wider shadow-sm border border-amber-300 transition-all cursor-pointer`}
-                >
-                  <Upload className="w-4 h-4 shrink-0" />
-                  {!isCollapsed && <span>Upload ZKTeco Excel</span>}
-                </button>
-
-                <button
-                  id="sidebar-quick-upload-dat-btn"
-                  onClick={() => handleNavClick('upload-dat')}
-                  title={isCollapsed ? 'Upload ZKTeco .DAT' : undefined}
-                  className={`w-full flex items-center ${
-                    isCollapsed ? 'justify-center p-2.5' : 'gap-2 px-3 py-2'
-                  } rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black uppercase tracking-wider shadow-sm border border-emerald-400 transition-all cursor-pointer`}
-                >
-                  <Upload className="w-4 h-4 text-amber-300 shrink-0" />
-                  {!isCollapsed && <span>Upload ZKTeco .DAT</span>}
-                </button>
-              </>
             )}
 
             {/* Change Default PIN Button */}

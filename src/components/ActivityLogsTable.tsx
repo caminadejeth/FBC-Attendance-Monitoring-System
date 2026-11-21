@@ -58,6 +58,8 @@ export const ActivityLogsTable: React.FC<ActivityLogsTableProps> = ({
         return 'bg-teal-200 text-teal-950 border-teal-400 font-bold';
       case 'SCHEDULE_UPDATE':
         return 'bg-indigo-200 text-indigo-950 border-indigo-400 font-bold';
+      case 'TICKET_MANAGEMENT':
+        return 'bg-amber-200 text-amber-950 border-amber-400 font-bold';
       default:
         return 'bg-zinc-200 text-zinc-900 border-zinc-400 font-bold';
     }
@@ -81,6 +83,8 @@ export const ActivityLogsTable: React.FC<ActivityLogsTableProps> = ({
         return 'bg-teal-50/65 hover:bg-teal-100/75 text-teal-950';
       case 'SCHEDULE_UPDATE':
         return 'bg-indigo-50/65 hover:bg-indigo-100/75 text-indigo-950';
+      case 'TICKET_MANAGEMENT':
+        return 'bg-amber-50/65 hover:bg-amber-100/75 text-amber-950';
       default:
         return 'bg-zinc-50/50 hover:bg-zinc-100/70 text-zinc-900';
     }
@@ -201,6 +205,7 @@ export const ActivityLogsTable: React.FC<ActivityLogsTableProps> = ({
             <option value="Users">User Management</option>
             <option value="Biometrics">Biometric Uploads</option>
             <option value="Schedules">Roster Schedules</option>
+            <option value="Store Tickets">Store Tickets</option>
           </select>
         </div>
       </div>

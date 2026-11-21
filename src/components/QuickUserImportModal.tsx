@@ -26,8 +26,8 @@ interface QuickUserImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   existingUsers: User[];
-  onAddUser: (user: User) => void;
-  onUpdateUser: (user: User) => void;
+  onAddUser: (user: User) => Promise<boolean> | boolean | void;
+  onUpdateUser: (user: User) => Promise<boolean> | boolean | void;
 }
 
 interface QuickRowInput {
@@ -313,9 +313,11 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
       const fullName = [fName, mName, lName].filter(Boolean).join(' ');
 
       const existing = existingUsers.find(
-        (u) => u.employeeId.toLowerCase() === r.employeeId.trim().toLowerCase()
+        (u) => (u.employeeId || '').trim().toLowerCase() === r.employeeId.trim().toLowerCase()
       );
 
+      const isShiftBased = r.role === 'STAFF' || r.role === 'SHIFT_MANAGER';
+      const resolvedDept = isShiftBased ? 'No fixed branch (Assigned per shift)' : r.department;
       const newUserObj: User = {
         id: existing ? existing.id : `usr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         employeeId: r.employeeId.trim(),
@@ -326,9 +328,10 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
         email: r.email.trim() || `${fName.toLowerCase()}@fbcrestaurants.com`,
         pin: r.pin.trim(),
         role: r.role,
-        department: (r.role === 'STAFF' || r.role === 'SHIFT_MANAGER') ? 'No fixed branch (Assigned per shift)' : r.department,
+        department: resolvedDept,
+        branch: isShiftBased ? '' : resolvedDept,
         position: r.position.trim() || 'Staff Member',
-        hourlyRate: 120,
+        hourlyRate: existing ? (existing.hourlyRate ?? 120) : 120,
         dateHired: r.dateHired || new Date().toISOString().split('T')[0],
         status: r.status,
         avatarUrl:
@@ -491,7 +494,7 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
 
     parsedUsers.forEach((r) => {
       const existing = existingUsers.find(
-        (u) => u.employeeId.toLowerCase() === r.employeeId.toLowerCase()
+        (u) => (u.employeeId || '').trim().toLowerCase() === r.employeeId.trim().toLowerCase()
       );
 
       if (existing && !overwriteDuplicates) {
@@ -501,14 +504,16 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
 
       const fName = r.firstName || 'Staff';
       const mName = r.middleName || '';
-      const lName = r.lastName || 'Member';
+      const lName = r.lastName || '';
       const fullName = [fName, mName, lName].filter(Boolean).join(' ');
+      const isShiftBased = r.role === 'STAFF' || r.role === 'SHIFT_MANAGER';
+      const resolvedDept = isShiftBased ? 'No fixed branch (Assigned per shift)' : r.department;
 
       const newUserObj: User = {
         id: existing
           ? existing.id
           : `usr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        employeeId: r.employeeId,
+        employeeId: r.employeeId.trim(),
         name: fullName,
         firstName: fName,
         middleName: mName,
@@ -516,9 +521,10 @@ export const QuickUserImportModal: React.FC<QuickUserImportModalProps> = ({
         email: r.email,
         pin: r.pin,
         role: r.role,
-        department: (r.role === 'STAFF' || r.role === 'SHIFT_MANAGER') ? 'No fixed branch (Assigned per shift)' : r.department,
+        department: resolvedDept,
+        branch: isShiftBased ? '' : resolvedDept,
         position: r.position,
-        hourlyRate: 120,
+        hourlyRate: existing ? (existing.hourlyRate ?? 120) : 120,
         dateHired: r.dateHired,
         status: r.status,
         avatarUrl:

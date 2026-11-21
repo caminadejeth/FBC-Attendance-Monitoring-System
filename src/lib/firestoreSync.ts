@@ -66,7 +66,7 @@ export function sortItemsByCollection<T extends { id: string }>(
       const timeB = new Date(b.timestamp || b.date || 0).getTime();
       return timeB - timeA;
     }
-    if (colName === 'stockTransfers') {
+    if (colName === 'stockTransfers' || colName === 'storeTickets') {
       const timeA = new Date(a.createdAt || a.date || 0).getTime();
       const timeB = new Date(b.createdAt || b.date || 0).getTime();
       return timeB - timeA;
@@ -270,7 +270,7 @@ export function subscribeCollection<T extends { id: string }>(
         await markCloudInitialized();
 
         const items: T[] = snapshot.docs
-          .map((docSnap) => docSnap.data() as T)
+          .map((docSnap) => ({ ...(docSnap.data() as Record<string, any>), id: docSnap.id } as T))
           .filter((item) => !deletedSet.has(item.id));
 
         const sortedItems = sortItemsByCollection(collectionName, items);
@@ -334,14 +334,19 @@ export function cleanUndefined<T>(obj: T): T {
 export async function saveDocument<T extends { id: string }>(
   collectionName: string,
   item: T
-) {
-  if (!item?.id) return;
+): Promise<boolean> {
+  if (!item?.id) {
+    console.error(`Cannot save to ${collectionName}: missing document id`, item);
+    return false;
+  }
   unmarkDeletedId(collectionName, item.id);
   try {
     const cleanedItem = cleanUndefined(item);
     await setDoc(doc(db, collectionName, item.id), cleanedItem, { merge: true });
+    return true;
   } catch (error) {
     console.error(`Error saving to ${collectionName}:`, error);
+    return false;
   }
 }
 

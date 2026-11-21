@@ -239,6 +239,63 @@
         "createdByUserId": { "type": "string" }
       },
       "required": ["id", "transferNumber", "strRefNumber", "date", "fromBranchCode", "toBranchCode", "items", "preparedBy", "status"]
+    },
+    "storeTickets": {
+      "title": "StoreTicket",
+      "description": "Store concern requests submitted by branch users to admin with status and resolution tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ticketNumber": { "type": "string" },
+        "branch": { "type": "string" },
+        "category": { "type": "string" },
+        "priority": { "type": "string" },
+        "subject": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "requestedByUserId": { "type": "string" },
+        "requestedByEmployeeId": { "type": "string" },
+        "requestedByName": { "type": "string" },
+        "requestedByRole": { "type": "string" },
+        "adminNotes": { "type": "string" },
+        "updatedBy": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "resolvedAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "statusHistory": { "type": "array" }
+      },
+      "required": ["id", "ticketNumber", "branch", "category", "priority", "subject", "description", "status", "requestedByName", "createdAt"]
+    },
+    "adminNotificationSettings": {
+      "title": "AdminEmailNotificationConfig",
+      "description": "Super Admin automatic email notification configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "recipientEmail": { "type": "string" },
+        "enabledCategories": { "type": "array", "items": { "type": "string" } },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" },
+        "lastSentAt": { "type": "string" },
+        "lastStatus": { "type": "string" },
+        "lastError": { "type": "string" }
+      },
+      "required": ["id", "enabled", "recipientEmail", "enabledCategories", "updatedAt"]
+    },
+    "emailedAlerts": {
+      "title": "EmailedAdminAlertRecord",
+      "description": "Deduplication log of alerts already emailed to Super Admin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "alertId": { "type": "string" },
+        "recipientEmail": { "type": "string" },
+        "sentAt": { "type": "string" },
+        "category": { "type": "string" },
+        "title": { "type": "string" }
+      },
+      "required": ["id", "alertId", "recipientEmail", "sentAt"]
     }
   },
   "firestore": {
@@ -257,6 +314,18 @@
     "/stockTransfers/{transferId}": {
       "schema": { "$ref": "#/entities/stockTransfers" },
       "description": "Stock Transfer Requisition (STR) documents"
+    },
+    "/storeTickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/storeTickets" },
+      "description": "Store concern tickets submitted to admin"
+    },
+    "/adminNotificationSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/adminNotificationSettings" },
+      "description": "Super Admin email notification settings"
+    },
+    "/emailedAlerts/{alertDocId}": {
+      "schema": { "$ref": "#/entities/emailedAlerts" },
+      "description": "Deduplicated history of emailed Super Admin alerts"
     }
   }
 }
