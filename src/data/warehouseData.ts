@@ -449,6 +449,7 @@ export function resolveItemExpiryDate(
   item?: Pick<WarehouseInventoryItem, 'expiryDate' | 'batchNo'> | null
 ): string | undefined {
   if (!item) return undefined;
+  if (item.expiryDate === '') return undefined;
   return normalizeExpiryDate(item.expiryDate) || normalizeExpiryDate(item.batchNo);
 }
 

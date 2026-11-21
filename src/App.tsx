@@ -1944,7 +1944,7 @@ export default function App() {
         itemCode: issuingItemCode,
         description: line.description,
         category: line.category,
-        batchNo: line.batchNo || 'GENERAL',
+        batchNo: (line.batchNo || '').trim(),
         uom: line.uom,
         unitPrice: Number(line.unitPrice) || 0,
         quantity: qty,
@@ -2010,7 +2010,8 @@ export default function App() {
             m.transferNumber === target.transferNumber &&
             m.branchCode === target.fromBranchCode &&
             (m.description || '').toLowerCase() === (line.description || '').toLowerCase() &&
-            (m.batchNo || '').toLowerCase() === (line.batchNo || 'GENERAL').toLowerCase()
+            ((m.batchNo || '').toLowerCase() === (line.batchNo || '').trim().toLowerCase() ||
+              (!(line.batchNo || '').trim() && (m.batchNo || '').toLowerCase() === 'general'))
         ) ||
         stockMovements.find(
           (m) =>
@@ -2071,7 +2072,7 @@ export default function App() {
               itemCode: restoredItem.itemCode || line.itemCode,
               description: line.description,
               category: line.category,
-              batchNo: line.batchNo || 'GENERAL',
+              batchNo: (line.batchNo || '').trim(),
               uom: line.uom,
               unitPrice: line.unitPrice,
               quantity: deductedQty,
@@ -2233,7 +2234,7 @@ export default function App() {
             itemCode: resolvedLineCode,
             description: line.description,
             category: line.category,
-            batchNo: line.batchNo || 'GENERAL',
+            batchNo: (line.batchNo || '').trim(),
             uom: line.uom,
             unitPrice: line.unitPrice || 0,
             branchCode: target.toBranchCode,
@@ -2266,7 +2267,7 @@ export default function App() {
         itemCode: resolvedLineCode,
         description: line.description,
         category: line.category,
-        batchNo: line.batchNo || 'GENERAL',
+        batchNo: (line.batchNo || '').trim(),
         uom: line.uom,
         unitPrice: line.unitPrice,
         quantity: qty,

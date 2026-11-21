@@ -872,9 +872,9 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       )
         .trim()
         .toUpperCase();
-      const batchNo = String(rawBatch ?? refMatch?.batchNo ?? '').trim();
+      const batchNo = String(rawBatch ?? '').trim();
       const expiryDate =
-        normalizeExpiryDate(rawExpiry) || normalizeExpiryDate(batchNo);
+        normalizeExpiryDate(rawExpiry) || normalizeExpiryDate(batchNo) || '';
       const uomRaw = String(rawUom ?? refMatch?.uom ?? 'Pack').trim();
       const matchedUom =
         WAREHOUSE_UOMS.find((u) => u.toLowerCase() === uomRaw.toLowerCase()) || uomRaw || 'Pack';
@@ -1025,8 +1025,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         'Item Code': '01-0001',
         Description: 'SAMPLE ITEM DESCRIPTION',
         Category: categoryOptions[0] || 'BEVERAGE',
-        'Batch / Exp': '12-31-26',
-        'Expiry Date': '2026-12-31',
+        'Batch / Exp': '',
+        'Expiry Date': '',
         UOM: 'Pack',
         Price: 0,
         Min: 2,
@@ -1297,7 +1297,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         setItemCategory(match.category);
       }
       if (match.uom) setItemUom(match.uom);
-      if (match.batchNo && !itemBatch.trim()) setItemBatch(match.batchNo);
       if (match.unitPrice > 0) setItemPrice(String(match.unitPrice));
       if (!editingItem) setItemReorder(String(match.reorderLevel));
     }
@@ -1324,7 +1323,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         setItemCategory(match.category);
       }
       if (match.uom) setItemUom(match.uom);
-      if (match.batchNo && !itemBatch.trim()) setItemBatch(match.batchNo);
       if (match.unitPrice > 0) setItemPrice(String(match.unitPrice));
       setItemReorder(String(match.reorderLevel));
     }
@@ -1373,8 +1371,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         ?.itemCode ||
       '';
 
-    const resolvedExpiry =
-      normalizeExpiryDate(itemExpiryDate) || normalizeExpiryDate(itemBatch);
+    const resolvedExpiry = normalizeExpiryDate(itemExpiryDate) || '';
     const effectiveQty = editingItem
       ? isSuperAdmin
         ? parsedQty
@@ -1897,7 +1894,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
           m.transferNumber === trf.transferNumber &&
           m.branchCode === trf.fromBranchCode &&
           (m.description || '').toLowerCase() === lineDesc &&
-          (m.batchNo || '').toLowerCase() === (lineBatch || 'general')
+          ((m.batchNo || '').toLowerCase() === lineBatch ||
+            (!lineBatch && (m.batchNo || '').toLowerCase() === 'general'))
       ) ||
       stockMovements.find(
         (m) =>
@@ -3517,7 +3515,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           </div>
                         )}
 
-                        <div className="grid grid-cols-3 gap-2 items-start">
+                        <div className="grid grid-cols-2 gap-2 items-start">
                           <div>
                             <label className="block text-[9px] font-black uppercase text-zinc-500 mb-0.5">
                               Item Code
@@ -3529,6 +3527,18 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               onChange={(e) => handleStrLineCodeChange(idx, e.target.value)}
                               placeholder="01-0601"
                               className="w-full px-2 py-1.5 rounded-lg border border-zinc-300 bg-white font-mono text-[11px] font-bold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[9px] font-black uppercase text-zinc-500 mb-0.5">
+                              Batch / Exp (Optional)
+                            </label>
+                            <input
+                              type="text"
+                              value={line.batchNo || ''}
+                              onChange={(e) => handleUpdateLineItem(idx, 'batchNo', e.target.value)}
+                              placeholder="Optional"
+                              className="w-full px-2 py-1.5 rounded-lg border border-zinc-300 bg-white font-mono text-[11px] text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
                             />
                           </div>
                           <div>
@@ -3583,8 +3593,9 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <th className="px-3 py-1.5 w-10 text-center">#</th>
                         <th className="px-2 py-1.5 w-28">Item Code</th>
                         <th className="px-3 py-1.5">Pick Item</th>
-                        <th className="px-3 py-1.5 w-28">UOM</th>
-                        <th className="px-3 py-1.5 w-28 text-right">Qty</th>
+                        <th className="px-2 py-1.5 w-28">Batch / Exp</th>
+                        <th className="px-3 py-1.5 w-24">UOM</th>
+                        <th className="px-3 py-1.5 w-24 text-right">Qty</th>
                         <th className="px-3 py-1.5 w-10"></th>
                       </tr>
                     </thead>
@@ -3656,6 +3667,15 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                   {line.description ? 'Change Item' : 'Search Item'}
                                 </button>
                               </div>
+                            </td>
+                            <td className="p-1.5">
+                              <input
+                                type="text"
+                                value={line.batchNo || ''}
+                                onChange={(e) => handleUpdateLineItem(idx, 'batchNo', e.target.value)}
+                                placeholder="Optional"
+                                className="w-full px-2 py-1.5 rounded-lg border border-zinc-300 font-mono text-[11px] text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                              />
                             </td>
                             <td className="p-1.5">
                               <div
@@ -4702,7 +4722,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                 </div>
                 <div>
                   <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
-                    Batch / Exp
+                    Batch / Exp <span className="text-zinc-400 font-semibold normal-case">(Optional)</span>
                   </label>
                   <input
                     type="text"
@@ -4715,7 +4735,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         setItemExpiryDate(parsed);
                       }
                     }}
-                    placeholder="e.g. 10-31-28"
+                    placeholder="Optional (leave blank if N/A)"
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
                   />
                 </div>
@@ -4739,7 +4759,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
               <div>
                 <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
-                  Expiry Date (Near-Expiry Alerts ≤{NEAR_EXPIRY_THRESHOLD_DAYS} Days)
+                  Expiry Date <span className="text-zinc-400 font-semibold normal-case">(Optional · Near-Expiry Alerts ≤{NEAR_EXPIRY_THRESHOLD_DAYS}d)</span>
                 </label>
                 <div className="flex items-center gap-2">
                   <input
@@ -5611,12 +5631,13 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                 </div>
                 <div>
                   <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
-                    Batch No
+                    Batch No <span className="text-zinc-400 font-semibold normal-case">(Optional)</span>
                   </label>
                   <input
                     type="text"
                     value={ledgerFormBatch}
                     onChange={(e) => setLedgerFormBatch(e.target.value)}
+                    placeholder="Optional"
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 font-mono text-zinc-900"
                   />
                 </div>
@@ -5860,7 +5881,10 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                 <div className="p-8 text-center text-xs text-zinc-500 space-y-1">
                   <div className="font-bold text-zinc-700">No file loaded yet</div>
                   <div>
-                    Expected columns: <span className="font-mono">Branch, Item Code, Description, Category, Batch / Exp, UOM, Price, Min, Qty</span>
+                    Expected columns: <span className="font-mono">Branch, Item Code, Description, Category, Batch / Exp (opt), Expiry Date (opt), UOM, Price, Min, Qty</span>
+                  </div>
+                  <div className="text-[11px] text-zinc-400">
+                    Batch / Exp and Expiry Date are optional and can be left blank.
                   </div>
                 </div>
               ) : (
