@@ -14,6 +14,7 @@ import {
   StockTransferLineItem,
   StockTransferRequisition,
   StoreTicket,
+  StoreTicketAttachment,
   StoreTicketCategory,
   StoreTicketPriority,
   StoreTicketStatus,
@@ -30,6 +31,7 @@ import {
   calculateGrossHours,
   getDayOfWeekName,
 } from './utils/timeFormatters';
+import { isSafeImageSrc } from './utils/imageCompression';
 import {
   INITIAL_DAILY_SUMMARIES,
   INITIAL_DISPUTES,
@@ -84,6 +86,8 @@ import {
   removeDocument,
   isWarehouseCatalogSeeded,
   markWarehouseCatalogSeeded,
+  safeLocalStorageSet,
+  safeCacheCollectionItems,
 } from './lib/firestoreSync';
 
 const loadFromStorage = <T,>(key: string, fallback: T): T => {
@@ -273,12 +277,14 @@ export default function App() {
   useEffect(() => {
     try {
       if (currentUser) {
-        localStorage.setItem('fbc_current_user', JSON.stringify(currentUser));
+        safeLocalStorageSet('fbc_current_user', JSON.stringify(currentUser), {
+          essential: true,
+        });
       } else {
         localStorage.removeItem('fbc_current_user');
       }
-    } catch (e) {
-      console.error(e);
+    } catch {
+      // Ignore storage access errors
     }
   }, [currentUser]);
 
@@ -453,11 +459,9 @@ export default function App() {
     const ok = await saveDocument('adminNotificationSettings', nextConfig);
     if (!ok) return false;
     setAdminEmailSettingsList([nextConfig]);
-    try {
-      localStorage.setItem('fbc_adminNotificationSettings', JSON.stringify([nextConfig]));
-    } catch (e) {
-      console.error(e);
-    }
+    safeLocalStorageSet('fbc_adminNotificationSettings', JSON.stringify([nextConfig]), {
+      essential: true,
+    });
     logActivity(
       'SYSTEM_EVENT',
       `Updated Super Admin automatic email notification settings (${nextConfig.enabled ? 'ENABLED' : 'PAUSED'} → ${nextConfig.recipientEmail}).`,
@@ -1027,11 +1031,7 @@ export default function App() {
     saveDocument('ctoRequests', req);
     setCtoRequests((prev) => {
       const next = [req, ...prev];
-      try {
-        localStorage.setItem('fbc_cto_requests', JSON.stringify(next));
-      } catch (e) {
-        console.error(e);
-      }
+      safeCacheCollectionItems('ctoRequests', next);
       return next;
     });
   };
@@ -1181,11 +1181,7 @@ export default function App() {
 
     setCtoRequests((prev) => {
       const next = prev.map((r) => (r.id === sanitizedCto.id ? sanitizedCto : r));
-      try {
-        localStorage.setItem('fbc_cto_requests', JSON.stringify(next));
-      } catch (e) {
-        console.error(e);
-      }
+      safeCacheCollectionItems('ctoRequests', next);
       return next;
     });
 
@@ -1270,11 +1266,7 @@ export default function App() {
   const handleAddUser = async (newUser: User): Promise<boolean> => {
     setUsers((prev) => {
       const next = [...prev, newUser];
-      try {
-        localStorage.setItem('fbc_users', JSON.stringify(next));
-      } catch (e) {
-        console.error(e);
-      }
+      safeCacheCollectionItems('users', next);
       return next;
     });
     const ok = await saveDocument('users', newUser);
@@ -1285,11 +1277,7 @@ export default function App() {
   const handleUpdateUser = async (updatedUser: User): Promise<boolean> => {
     setUsers((prev) => {
       const next = prev.map((u) => (u.id === updatedUser.id ? updatedUser : u));
-      try {
-        localStorage.setItem('fbc_users', JSON.stringify(next));
-      } catch (e) {
-        console.error(e);
-      }
+      safeCacheCollectionItems('users', next);
       return next;
     });
     if (currentUser && currentUser.id === updatedUser.id) {
@@ -1310,11 +1298,7 @@ export default function App() {
   const handleDeleteDispute = (disputeId: string) => {
     setDisputes((prev) => {
       const updated = prev.filter((d) => d.id !== disputeId);
-      try {
-        localStorage.setItem('fbc_disputes', JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      safeCacheCollectionItems('disputes', updated);
       return updated;
     });
     removeDocument('disputes', disputeId);
@@ -1356,11 +1340,7 @@ export default function App() {
     const target = ctoRequests.find((c) => c.id === ctoId);
     setCtoRequests((prev) => {
       const next = prev.filter((c) => c.id !== ctoId);
-      try {
-        localStorage.setItem('fbc_cto_requests', JSON.stringify(next));
-      } catch (e) {
-        console.error(e);
-      }
+      safeCacheCollectionItems('ctoRequests', next);
       return next;
     });
     await removeDocument('ctoRequests', ctoId);
@@ -2464,6 +2444,7 @@ export default function App() {
     priority: StoreTicketPriority;
     subject: string;
     description: string;
+    attachments?: StoreTicketAttachment[];
   }): Promise<boolean> => {
     if (!currentUser) return false;
     const nowIso = new Date().toISOString();
@@ -2476,6 +2457,10 @@ export default function App() {
     const nextSeq = (todaySeqs.length > 0 ? Math.max(...todaySeqs) : 0) + 1;
     const ticketNumber = `${todayPrefix}${String(nextSeq).padStart(3, '0')}`;
 
+    const sanitizedAttachments = (payload.attachments || [])
+      .filter((att) => att && isSafeImageSrc(att.dataUrl))
+      .slice(0, 3);
+
     const newTicket: StoreTicket = {
       id: `tck-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       ticketNumber,
@@ -2484,6 +2469,7 @@ export default function App() {
       priority: payload.priority,
       subject: payload.subject,
       description: payload.description,
+      attachments: sanitizedAttachments.length > 0 ? sanitizedAttachments : undefined,
       status: 'PENDING',
       requestedByUserId: currentUser.id,
       requestedByEmployeeId: currentUser.employeeId,
@@ -2498,7 +2484,10 @@ export default function App() {
           changedBy: currentUser.name,
           changedByRole: currentUser.role,
           changedAt: nowIso,
-          note: `Submitted ticket for ${payload.branch}`,
+          note:
+            sanitizedAttachments.length > 0
+              ? `Submitted ticket for ${payload.branch} with ${sanitizedAttachments.length} photo(s)`
+              : `Submitted ticket for ${payload.branch}`,
         },
       ],
     };
@@ -2508,17 +2497,13 @@ export default function App() {
 
     setStoreTickets((prev) => {
       const next = [newTicket, ...prev];
-      try {
-        localStorage.setItem('fbc_storeTickets', JSON.stringify(next));
-      } catch (e) {
-        console.error(e);
-      }
+      safeCacheCollectionItems('storeTickets', next);
       return next;
     });
 
     logActivity(
       'TICKET_MANAGEMENT',
-      `Submitted store ticket ${newTicket.ticketNumber} for ${newTicket.branch} [${newTicket.category} · ${newTicket.priority}]: "${newTicket.subject}".`,
+      `Submitted store ticket ${newTicket.ticketNumber} for ${newTicket.branch} [${newTicket.category} · ${newTicket.priority}]: "${newTicket.subject}"${sanitizedAttachments.length > 0 ? ` (${sanitizedAttachments.length} image(s) attached)` : ''}.`,
       'Store Tickets'
     );
     return true;
@@ -2572,11 +2557,7 @@ export default function App() {
 
     setStoreTickets((prev) => {
       const next = prev.map((t) => (t.id === ticketId ? updatedTicket : t));
-      try {
-        localStorage.setItem('fbc_storeTickets', JSON.stringify(next));
-      } catch (e) {
-        console.error(e);
-      }
+      safeCacheCollectionItems('storeTickets', next);
       return next;
     });
 
@@ -2588,17 +2569,56 @@ export default function App() {
     return true;
   };
 
+  const handleUpdateStoreTicketAttachments = async (
+    ticketId: string,
+    attachments: StoreTicketAttachment[]
+  ): Promise<boolean> => {
+    if (!currentUser) return false;
+    const target = storeTickets.find((t) => t.id === ticketId);
+    if (!target) return false;
+
+    const isOwner = target.requestedByEmployeeId === currentUser.employeeId;
+    const isAdminUser = currentUser.role === 'ADMIN';
+    if (!isAdminUser && (!isOwner || target.status === 'DONE' || target.status === 'CANCELLED')) {
+      return false;
+    }
+
+    const sanitizedAttachments = (attachments || [])
+      .filter((att) => att && isSafeImageSrc(att.dataUrl))
+      .slice(0, 3);
+
+    const nowIso = new Date().toISOString();
+    const updatedTicket: StoreTicket = {
+      ...target,
+      attachments: sanitizedAttachments,
+      updatedBy: currentUser.name,
+      updatedAt: nowIso,
+    };
+
+    const ok = await saveDocument('storeTickets', updatedTicket);
+    if (!ok) return false;
+
+    setStoreTickets((prev) => {
+      const next = prev.map((t) => (t.id === ticketId ? updatedTicket : t));
+      safeCacheCollectionItems('storeTickets', next);
+      return next;
+    });
+
+    logActivity(
+      'TICKET_MANAGEMENT',
+      `Updated photo attachments on store ticket ${updatedTicket.ticketNumber} (${sanitizedAttachments.length} image(s)).`,
+      'Store Tickets'
+    );
+    return true;
+  };
+
   const handleDeleteStoreTicket = async (ticketId: string): Promise<boolean> => {
     if (currentUser?.role !== 'ADMIN') return false;
     const target = storeTickets.find((t) => t.id === ticketId);
     await removeDocument('storeTickets', ticketId);
     setStoreTickets((prev) => {
       const next = prev.filter((t) => t.id !== ticketId);
-      try {
-        localStorage.setItem('fbc_storeTickets', JSON.stringify(next));
-      } catch (e) {
-        console.error(e);
-      }
+      safeCacheCollectionItems('storeTickets', next);
       return next;
     });
     if (target) {
@@ -2806,6 +2826,7 @@ export default function App() {
                 tickets={storeTickets}
                 onCreateTicket={handleCreateStoreTicket}
                 onUpdateTicketStatus={handleUpdateStoreTicketStatus}
+                onUpdateTicketAttachments={handleUpdateStoreTicketAttachments}
                 onDeleteTicket={handleDeleteStoreTicket}
               />
             ) : (

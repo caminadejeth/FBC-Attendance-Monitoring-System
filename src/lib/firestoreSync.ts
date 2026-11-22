@@ -8,6 +8,105 @@ const getStorageKey = (colName: string) => {
 
 const getDeletedKey = (colName: string) => `fbc_deleted_${colName}`;
 
+// Keep browser localStorage well below the ~5MB origin quota so critical session keys never fail.
+const MAX_COLLECTION_CACHE_CHARS = 350_000;
+const EVICTABLE_CACHE_KEYS = [
+  'fbc_summaries',
+  'fbc_punches',
+  'fbc_stockMovements',
+  'fbc_activityLogs',
+  'fbc_activity_logs',
+  'fbc_warehouseItems',
+  'fbc_storeTickets',
+  'fbc_stockTransfers',
+  'fbc_emailedAlerts',
+];
+
+function evictBulkyCaches(preserveKey?: string) {
+  for (const key of EVICTABLE_CACHE_KEYS) {
+    if (key === preserveKey) continue;
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Ignore storage access errors
+    }
+  }
+}
+
+export function safeLocalStorageSet(
+  key: string,
+  value: string,
+  options?: { essential?: boolean }
+): boolean {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch {
+    // Quota exceeded or storage unavailable: free bulky caches and retry if essential or small enough
+    evictBulkyCaches(key);
+    if (options?.essential || value.length <= MAX_COLLECTION_CACHE_CHARS) {
+      try {
+        localStorage.setItem(key, value);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+}
+
+function sanitizeItemsForCache<T>(collectionName: string, items: T[]): unknown[] {
+  if (collectionName !== 'storeTickets') return items;
+  // Strip base64 photo blobs from localStorage cache; live images come directly from Firestore.
+  return (items as Array<Record<string, any>>).map((ticket) => {
+    if (!Array.isArray(ticket?.attachments) || ticket.attachments.length === 0) {
+      return ticket;
+    }
+    return {
+      ...ticket,
+      attachments: ticket.attachments.map((att: Record<string, any>) => ({
+        ...att,
+        dataUrl: '',
+      })),
+    };
+  });
+}
+
+export function safeCacheCollectionItems<T>(collectionName: string, items: T[]): void {
+  const storageKey = getStorageKey(collectionName);
+  try {
+    const payload = sanitizeItemsForCache(collectionName, items);
+    const serialized = JSON.stringify(payload);
+    if (serialized.length > MAX_COLLECTION_CACHE_CHARS) {
+      // Too large for localStorage quota; clear any stale oversized cache entry silently.
+      try {
+        localStorage.removeItem(storageKey);
+      } catch {
+        // Ignore
+      }
+      return;
+    }
+    safeLocalStorageSet(storageKey, serialized);
+  } catch {
+    // Never treat optional localStorage caching failure as a fatal error
+  }
+}
+
+// Prune any legacy oversized collection caches on startup to free browser quota
+try {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    for (const key of EVICTABLE_CACHE_KEYS) {
+      const existingVal = window.localStorage.getItem(key);
+      if (existingVal && existingVal.length > MAX_COLLECTION_CACHE_CHARS) {
+        window.localStorage.removeItem(key);
+      }
+    }
+  }
+} catch {
+  // Ignore storage access errors
+}
+
 let cloudInitializedCache: boolean | null = null;
 
 async function isCloudInitialized(): Promise<boolean> {
@@ -95,7 +194,7 @@ export async function isWarehouseCatalogSeeded(): Promise<boolean> {
     }
     const metaSnap = await getDoc(doc(db, '_metadata', 'warehouseCatalogSeededV1'));
     if (metaSnap.exists()) {
-      localStorage.setItem('fbc_warehouse_catalog_seeded_v1', 'true');
+      safeLocalStorageSet('fbc_warehouse_catalog_seeded_v1', 'true', { essential: true });
       return true;
     }
   } catch (e) {
@@ -106,7 +205,7 @@ export async function isWarehouseCatalogSeeded(): Promise<boolean> {
 
 export async function markWarehouseCatalogSeeded(): Promise<void> {
   try {
-    localStorage.setItem('fbc_warehouse_catalog_seeded_v1', 'true');
+    safeLocalStorageSet('fbc_warehouse_catalog_seeded_v1', 'true', { essential: true });
     await setDoc(
       doc(db, '_metadata', 'warehouseCatalogSeededV1'),
       { seeded: true, timestamp: new Date().toISOString() },
@@ -124,49 +223,43 @@ export function getDeletedIds(colName: string): Set<string> {
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) return new Set(arr);
     }
-  } catch (e) {
-    console.error(`Failed loading deleted IDs for ${colName}`, e);
+  } catch {
+    // Ignore storage read error
   }
   return new Set();
 }
 
 export function recordDeletedId(colName: string, id: string) {
-  try {
-    const deletedSet = getDeletedIds(colName);
-    deletedSet.add(id);
-    localStorage.setItem(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)));
-  } catch (e) {
-    console.error(`Failed recording deleted ID for ${colName}`, e);
-  }
+  const deletedSet = getDeletedIds(colName);
+  deletedSet.add(id);
+  safeLocalStorageSet(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)), {
+    essential: true,
+  });
 }
 
 export function unmarkDeletedId(colName: string, id: string) {
-  try {
-    const deletedSet = getDeletedIds(colName);
-    if (deletedSet.has(id)) {
-      deletedSet.delete(id);
-      localStorage.setItem(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)));
-    }
-  } catch (e) {
-    console.error(`Failed unmarking deleted ID for ${colName}`, e);
+  const deletedSet = getDeletedIds(colName);
+  if (deletedSet.has(id)) {
+    deletedSet.delete(id);
+    safeLocalStorageSet(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)), {
+      essential: true,
+    });
   }
 }
 
 export function unmarkDeletedIds(colName: string, ids: string[]) {
-  try {
-    const deletedSet = getDeletedIds(colName);
-    let changed = false;
-    for (const id of ids) {
-      if (deletedSet.has(id)) {
-        deletedSet.delete(id);
-        changed = true;
-      }
+  const deletedSet = getDeletedIds(colName);
+  let changed = false;
+  for (const id of ids) {
+    if (deletedSet.has(id)) {
+      deletedSet.delete(id);
+      changed = true;
     }
-    if (changed) {
-      localStorage.setItem(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)));
-    }
-  } catch (e) {
-    console.error(`Failed unmarking deleted IDs for ${colName}`, e);
+  }
+  if (changed) {
+    safeLocalStorageSet(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)), {
+      essential: true,
+    });
   }
 }
 
@@ -195,11 +288,7 @@ export function subscribeCollection<T extends { id: string }>(
 
         if (isSeededLocally || isSeededInCloud) {
           // Collection was already initialized; empty means intentionally empty!
-          try {
-            localStorage.setItem(storageKey, JSON.stringify([]));
-          } catch (e) {
-            console.error(`Failed clearing cache ${storageKey}`, e);
-          }
+          safeLocalStorageSet(storageKey, JSON.stringify([]));
           onUpdate([]);
           return;
         }
@@ -208,8 +297,8 @@ export function subscribeCollection<T extends { id: string }>(
         let cached: string | null = null;
         try {
           cached = localStorage.getItem(storageKey);
-        } catch (e) {
-          console.error(`Failed reading cache ${storageKey}`, e);
+        } catch {
+          // Ignore
         }
         if (cached) {
           try {
@@ -217,11 +306,7 @@ export function subscribeCollection<T extends { id: string }>(
             if (Array.isArray(parsed) && parsed.length > 0) {
               const filtered = parsed.filter((item) => !deletedSet.has(item.id));
               const sorted = sortItemsByCollection(collectionName, filtered);
-              try {
-                localStorage.setItem(seededKey, 'true');
-              } catch (e) {
-                console.error(`Failed marking ${seededKey}`, e);
-              }
+              safeLocalStorageSet(seededKey, 'true', { essential: true });
               await markCloudInitialized();
               onUpdate(sorted);
               // Seed cached items to firestore so cloud is populated
@@ -238,35 +323,19 @@ export function subscribeCollection<T extends { id: string }>(
         const sortedInitial = sortItemsByCollection(collectionName, validInitial);
 
         if (sortedInitial.length > 0) {
-          try {
-            localStorage.setItem(seededKey, 'true');
-          } catch (e) {
-            console.error(`Failed marking ${seededKey}`, e);
-          }
+          safeLocalStorageSet(seededKey, 'true', { essential: true });
           await markCloudInitialized();
           await saveDocuments(collectionName, sortedInitial);
-          try {
-            localStorage.setItem(storageKey, JSON.stringify(sortedInitial));
-          } catch (e) {
-            console.error(e);
-          }
+          safeCacheCollectionItems(collectionName, sortedInitial);
           onUpdate(sortedInitial);
         } else {
-          try {
-            localStorage.setItem(seededKey, 'true');
-            localStorage.setItem(storageKey, JSON.stringify([]));
-          } catch (e) {
-            console.error(`Failed initializing empty cache ${storageKey}`, e);
-          }
+          safeLocalStorageSet(seededKey, 'true', { essential: true });
+          safeLocalStorageSet(storageKey, JSON.stringify([]));
           await markCloudInitialized();
           onUpdate([]);
         }
       } else {
-        try {
-          localStorage.setItem(seededKey, 'true');
-        } catch (e) {
-          console.error(`Failed marking ${seededKey}`, e);
-        }
+        safeLocalStorageSet(seededKey, 'true', { essential: true });
         await markCloudInitialized();
 
         const items: T[] = snapshot.docs
@@ -275,11 +344,7 @@ export function subscribeCollection<T extends { id: string }>(
 
         const sortedItems = sortItemsByCollection(collectionName, items);
 
-        try {
-          localStorage.setItem(storageKey, JSON.stringify(sortedItems));
-        } catch (err) {
-          console.error(`Failed caching ${storageKey}`, err);
-        }
+        safeCacheCollectionItems(collectionName, sortedItems);
         onUpdate(sortedItems);
       }
     },
@@ -391,11 +456,11 @@ export async function removeDocument(collectionName: string, id: string) {
       const parsed = JSON.parse(cached);
       if (Array.isArray(parsed)) {
         const filtered = parsed.filter((item: any) => item.id !== id);
-        localStorage.setItem(storageKey, JSON.stringify(filtered));
+        safeCacheCollectionItems(collectionName, filtered);
       }
     }
-  } catch (e) {
-    console.error(`Error deleting from cache for ${collectionName}:`, e);
+  } catch {
+    // Ignore cache cleanup error
   }
 
   try {

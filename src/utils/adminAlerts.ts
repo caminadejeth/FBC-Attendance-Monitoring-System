@@ -13,6 +13,7 @@ import {
   isMonitoredWarehouseBranch,
   NEAR_EXPIRY_THRESHOLD_DAYS,
 } from '../data/warehouseData';
+import { safeLocalStorageSet } from '../lib/firestoreSync';
 
 export type AdminAlertCategory =
   | 'STR'
@@ -317,12 +318,10 @@ export function loadAdminReadAlertIds(userId?: string): Set<string> {
 }
 
 export function saveAdminReadAlertIds(userId: string, ids: Set<string>): void {
-  try {
-    const bounded = Array.from(ids).slice(-400);
-    localStorage.setItem(`fbc_admin_read_alerts_${userId}`, JSON.stringify(bounded));
-  } catch (err) {
-    console.error('Failed saving read admin alert IDs:', err);
-  }
+  const bounded = Array.from(ids).slice(-400);
+  safeLocalStorageSet(`fbc_admin_read_alerts_${userId}`, JSON.stringify(bounded), {
+    essential: true,
+  });
 }
 
 export function loadAdminDismissedAlertIds(userId?: string): Set<string> {
@@ -340,12 +339,10 @@ export function loadAdminDismissedAlertIds(userId?: string): Set<string> {
 }
 
 export function saveAdminDismissedAlertIds(userId: string, ids: Set<string>): void {
-  try {
-    const bounded = Array.from(ids).slice(-400);
-    localStorage.setItem(`fbc_admin_dismissed_alerts_${userId}`, JSON.stringify(bounded));
-  } catch (err) {
-    console.error('Failed saving dismissed admin alert IDs:', err);
-  }
+  const bounded = Array.from(ids).slice(-400);
+  safeLocalStorageSet(`fbc_admin_dismissed_alerts_${userId}`, JSON.stringify(bounded), {
+    essential: true,
+  });
 }
 
 export const DEFAULT_ADMIN_ALERT_EMAIL = 'caminadejeth@gmail.com';

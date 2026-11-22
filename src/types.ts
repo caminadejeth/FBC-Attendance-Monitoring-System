@@ -398,6 +398,14 @@ export interface StoreTicketStatusHistoryEntry {
   note?: string;
 }
 
+export interface StoreTicketAttachment {
+  id: string;
+  name: string;
+  dataUrl: string;
+  sizeBytes?: number;
+  uploadedAt: string;
+}
+
 export interface StoreTicket {
   id: string;
   ticketNumber: string; // e.g. TCK-20261120-001
@@ -406,6 +414,7 @@ export interface StoreTicket {
   priority: StoreTicketPriority;
   subject: string;
   description: string;
+  attachments?: StoreTicketAttachment[];
   status: StoreTicketStatus;
   requestedByUserId: string;
   requestedByEmployeeId: string;

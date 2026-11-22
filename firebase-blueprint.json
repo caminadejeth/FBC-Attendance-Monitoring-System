@@ -252,6 +252,7 @@
         "priority": { "type": "string" },
         "subject": { "type": "string" },
         "description": { "type": "string" },
+        "attachments": { "type": "array" },
         "status": { "type": "string" },
         "requestedByUserId": { "type": "string" },
         "requestedByEmployeeId": { "type": "string" },

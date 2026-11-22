@@ -1,12 +1,18 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import {
   StoreTicket,
+  StoreTicketAttachment,
   StoreTicketCategory,
   StoreTicketPriority,
   StoreTicketStatus,
   User,
 } from '../types';
 import { formatRealtimeTimestamp } from '../utils/timeFormatters';
+import {
+  compressTicketImageFile,
+  formatBytes,
+  isSafeImageSrc,
+} from '../utils/imageCompression';
 import {
   showErrorAlert,
   showSuccessAlert,
@@ -24,7 +30,6 @@ import {
   PauseCircle,
   XCircle,
   Loader2,
-  AlertTriangle,
   Eye,
   Edit3,
   Trash2,
@@ -36,6 +41,14 @@ import {
   Package,
   Building,
   HelpCircle,
+  ImagePlus,
+  Image as ImageIcon,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  ChevronLeft,
+  ChevronRight,
+  Download,
 } from 'lucide-react';
 
 export const STORE_TICKET_BRANCHES: string[] = [
@@ -81,11 +94,16 @@ interface StoreTicketingDashboardProps {
     priority: StoreTicketPriority;
     subject: string;
     description: string;
+    attachments?: StoreTicketAttachment[];
   }) => Promise<boolean>;
   onUpdateTicketStatus: (
     ticketId: string,
     newStatus: StoreTicketStatus,
     adminNotes: string
+  ) => Promise<boolean>;
+  onUpdateTicketAttachments?: (
+    ticketId: string,
+    attachments: StoreTicketAttachment[]
   ) => Promise<boolean>;
   onDeleteTicket: (ticketId: string) => Promise<boolean>;
 }
@@ -180,9 +198,11 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
   tickets,
   onCreateTicket,
   onUpdateTicketStatus,
+  onUpdateTicketAttachments,
   onDeleteTicket,
 }) => {
   const isAdmin = currentUser.role === 'ADMIN';
+  const MAX_TICKET_IMAGES = 3;
 
   // Filters & Pagination State
   const [searchQuery, setSearchQuery] = useState('');
@@ -201,12 +221,28 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
   const [formPriority, setFormPriority] = useState<StoreTicketPriority>('MEDIUM');
   const [formSubject, setFormSubject] = useState('');
   const [formDescription, setFormDescription] = useState('');
+  const [formAttachments, setFormAttachments] = useState<StoreTicketAttachment[]>([]);
+  const [isProcessingImages, setIsProcessingImages] = useState(false);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const createFileInputRef = useRef<HTMLInputElement | null>(null);
+  const detailFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Detail / Admin Update Modal State
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [modalStatus, setModalStatus] = useState<StoreTicketStatus>('PENDING');
   const [modalAdminNotes, setModalAdminNotes] = useState('');
   const [isUpdatingTicket, setIsUpdatingTicket] = useState(false);
+  const [isUpdatingDetailImages, setIsUpdatingDetailImages] = useState(false);
+
+  // Full-Screen Image Viewer Lightbox State
+  const [lightboxState, setLightboxState] = useState<{
+    images: StoreTicketAttachment[];
+    index: number;
+    title: string;
+    subtitle?: string;
+  } | null>(null);
+  const [lightboxZoom, setLightboxZoom] = useState(1);
+  const [brokenImageIds, setBrokenImageIds] = useState<Record<string, boolean>>({});
 
   const selectedTicket = useMemo(
     () => tickets.find((t) => t.id === selectedTicketId) || null,
@@ -280,18 +316,192 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
     return filteredTickets.slice(start, start + pageSize);
   }, [filteredTickets, currentPage, pageSize]);
 
+  useEffect(() => {
+    if (!lightboxState) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setLightboxState(null);
+      } else if (e.key === 'ArrowLeft' && lightboxState.images.length > 1) {
+        setLightboxZoom(1);
+        setLightboxState((prev) =>
+          prev
+            ? {
+                ...prev,
+                index: (prev.index - 1 + prev.images.length) % prev.images.length,
+              }
+            : null
+        );
+      } else if (e.key === 'ArrowRight' && lightboxState.images.length > 1) {
+        setLightboxZoom(1);
+        setLightboxState((prev) =>
+          prev
+            ? {
+                ...prev,
+                index: (prev.index + 1) % prev.images.length,
+              }
+            : null
+        );
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [lightboxState]);
+
+  const openImageLightbox = (
+    images: StoreTicketAttachment[],
+    index: number,
+    title: string,
+    subtitle?: string
+  ) => {
+    const validImages = (images || []).filter((img) => img && isSafeImageSrc(img.dataUrl));
+    if (validImages.length === 0) return;
+    setLightboxZoom(1);
+    setLightboxState({
+      images: validImages,
+      index: Math.max(0, Math.min(index, validImages.length - 1)),
+      title,
+      subtitle,
+    });
+  };
+
   const handleOpenCreateModal = () => {
     setFormBranch(getDefaultBranchForUser(currentUser));
     setFormCategory('Equipment');
     setFormPriority('MEDIUM');
     setFormSubject('');
     setFormDescription('');
+    setFormAttachments([]);
+    setIsDragActive(false);
     setShowCreateModal(true);
+  };
+
+  const handleProcessCreateImageFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const remainingSlots = MAX_TICKET_IMAGES - formAttachments.length;
+    if (remainingSlots <= 0) {
+      showErrorAlert(
+        'Photo Limit Reached',
+        `You can attach up to ${MAX_TICKET_IMAGES} images per store ticket.`
+      );
+      return;
+    }
+
+    const incomingFiles = Array.from(fileList).slice(0, remainingSlots);
+    if (fileList.length > remainingSlots) {
+      showErrorAlert(
+        'Extra Photos Skipped',
+        `Only ${remainingSlots} more image(s) can be added (maximum ${MAX_TICKET_IMAGES} photos per ticket).`
+      );
+    }
+
+    setIsProcessingImages(true);
+    try {
+      const compressed: StoreTicketAttachment[] = [];
+      const errors: string[] = [];
+      for (const file of incomingFiles) {
+        try {
+          const result = await compressTicketImageFile(file);
+          compressed.push(result);
+        } catch (err) {
+          errors.push(err instanceof Error ? err.message : `Failed to process "${file.name}".`);
+        }
+      }
+
+      if (compressed.length > 0) {
+        setFormAttachments((prev) => [...prev, ...compressed].slice(0, MAX_TICKET_IMAGES));
+      }
+      if (errors.length > 0) {
+        showErrorAlert('Image Upload Issue', errors.join(' '));
+      }
+    } finally {
+      setIsProcessingImages(false);
+      if (createFileInputRef.current) {
+        createFileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleRemoveCreateAttachment = (attachmentId: string) => {
+    setFormAttachments((prev) => prev.filter((item) => item.id !== attachmentId));
+  };
+
+  const handleAddDetailImages = async (
+    ticket: StoreTicket,
+    fileList: FileList | null
+  ) => {
+    if (!onUpdateTicketAttachments || !fileList || fileList.length === 0 || isUpdatingDetailImages) {
+      return;
+    }
+    const existing = Array.isArray(ticket.attachments) ? ticket.attachments : [];
+    const remainingSlots = MAX_TICKET_IMAGES - existing.length;
+    if (remainingSlots <= 0) {
+      showErrorAlert(
+        'Photo Limit Reached',
+        `This ticket already has the maximum of ${MAX_TICKET_IMAGES} photos.`
+      );
+      return;
+    }
+
+    const incomingFiles = Array.from(fileList).slice(0, remainingSlots);
+    setIsUpdatingDetailImages(true);
+    try {
+      const compressed: StoreTicketAttachment[] = [];
+      const errors: string[] = [];
+      for (const file of incomingFiles) {
+        try {
+          compressed.push(await compressTicketImageFile(file));
+        } catch (err) {
+          errors.push(err instanceof Error ? err.message : `Failed to process "${file.name}".`);
+        }
+      }
+
+      if (compressed.length > 0) {
+        const nextAttachments = [...existing, ...compressed].slice(0, MAX_TICKET_IMAGES);
+        const ok = await onUpdateTicketAttachments(ticket.id, nextAttachments);
+        if (!ok) {
+          showErrorAlert(
+            'Upload Failed',
+            'Could not save the uploaded photo(s) to this ticket.'
+          );
+        } else {
+          showSuccessAlert(
+            'Photo Added',
+            `Attached ${compressed.length} photo(s) to ${ticket.ticketNumber}.`
+          );
+        }
+      }
+      if (errors.length > 0) {
+        showErrorAlert('Image Upload Issue', errors.join(' '));
+      }
+    } finally {
+      setIsUpdatingDetailImages(false);
+      if (detailFileInputRef.current) {
+        detailFileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleRemoveDetailImage = async (
+    ticket: StoreTicket,
+    attachmentId: string
+  ) => {
+    if (!onUpdateTicketAttachments || isUpdatingDetailImages) return;
+    const existing = Array.isArray(ticket.attachments) ? ticket.attachments : [];
+    const nextAttachments = existing.filter((item) => item.id !== attachmentId);
+    setIsUpdatingDetailImages(true);
+    try {
+      const ok = await onUpdateTicketAttachments(ticket.id, nextAttachments);
+      if (!ok) {
+        showErrorAlert('Update Failed', 'Could not remove photo from this ticket.');
+      }
+    } finally {
+      setIsUpdatingDetailImages(false);
+    }
   };
 
   const handleSubmitCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSubmitting) return;
+    if (isSubmitting || isProcessingImages) return;
 
     const cleanSubject = formSubject.trim();
     const cleanDescription = formDescription.trim();
@@ -313,6 +523,7 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
         priority: formPriority,
         subject: cleanSubject,
         description: cleanDescription,
+        attachments: formAttachments,
       });
 
       if (!ok) {
@@ -324,6 +535,7 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
       }
 
       setShowCreateModal(false);
+      setFormAttachments([]);
       showSuccessAlert(
         'Store Ticket Submitted',
         `Your ${formCategory} concern for ${cleanBranch} has been sent to Admin with Pending status.`
@@ -703,6 +915,56 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
                       <p className="text-xs text-zinc-600 line-clamp-2">{t.description}</p>
                     </div>
 
+                    {Array.isArray(t.attachments) && t.attachments.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                        {t.attachments.map((att, idx) =>
+                          isSafeImageSrc(att.dataUrl) && !brokenImageIds[att.id] ? (
+                            <button
+                              key={att.id}
+                              type="button"
+                              onClick={() =>
+                                openImageLightbox(
+                                  t.attachments || [],
+                                  idx,
+                                  `${t.ticketNumber} · ${t.subject}`,
+                                  `${t.branch} · Submitted by ${t.requestedByName}`
+                                )
+                              }
+                              className="group relative w-12 h-12 rounded-lg overflow-hidden border border-zinc-200 hover:border-[#656D4A] cursor-pointer shrink-0 bg-zinc-100"
+                              title={`View ${att.name}`}
+                            >
+                              <img
+                                src={att.dataUrl}
+                                alt={att.name}
+                                referrerPolicy="no-referrer"
+                                onError={() =>
+                                  setBrokenImageIds((prev) => ({ ...prev, [att.id]: true }))
+                                }
+                                className="w-full h-full object-cover"
+                              />
+                            </button>
+                          ) : null
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openImageLightbox(
+                              t.attachments || [],
+                              0,
+                              `${t.ticketNumber} · ${t.subject}`,
+                              `${t.branch} · Submitted by ${t.requestedByName}`
+                            )
+                          }
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-zinc-300 bg-zinc-50 hover:bg-zinc-100 text-[11px] font-bold text-zinc-800 cursor-pointer whitespace-nowrap"
+                        >
+                          <ImageIcon className="w-3.5 h-3.5 text-[#656D4A]" />
+                          <span>
+                            View {t.attachments.length === 1 ? 'Photo' : `Photos (${t.attachments.length})`}
+                          </span>
+                        </button>
+                      </div>
+                    )}
+
                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-600">
                       <span className="inline-flex items-center gap-1 font-semibold text-zinc-800">
                         <CategoryIcon className="w-3.5 h-3.5 text-zinc-500" />
@@ -847,6 +1109,60 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
                           >
                             {t.description}
                           </div>
+                          {Array.isArray(t.attachments) && t.attachments.length > 0 && (
+                            <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                              {t.attachments.map((att, idx) =>
+                                isSafeImageSrc(att.dataUrl) && !brokenImageIds[att.id] ? (
+                                  <button
+                                    key={att.id}
+                                    type="button"
+                                    onClick={() =>
+                                      openImageLightbox(
+                                        t.attachments || [],
+                                        idx,
+                                        `${t.ticketNumber} · ${t.subject}`,
+                                        `${t.branch} · Submitted by ${t.requestedByName}`
+                                      )
+                                    }
+                                    className="w-8 h-8 rounded-md overflow-hidden border border-zinc-300 hover:border-[#656D4A] cursor-pointer shrink-0 bg-zinc-100 transition-transform hover:scale-105"
+                                    title={`View ${att.name}`}
+                                  >
+                                    <img
+                                      src={att.dataUrl}
+                                      alt={att.name}
+                                      referrerPolicy="no-referrer"
+                                      onError={() =>
+                                        setBrokenImageIds((prev) => ({
+                                          ...prev,
+                                          [att.id]: true,
+                                        }))
+                                      }
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </button>
+                                ) : null
+                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openImageLightbox(
+                                    t.attachments || [],
+                                    0,
+                                    `${t.ticketNumber} · ${t.subject}`,
+                                    `${t.branch} · Submitted by ${t.requestedByName}`
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-zinc-300 bg-zinc-50 hover:bg-amber-50 text-[10px] font-bold text-zinc-800 cursor-pointer whitespace-nowrap"
+                              >
+                                <ImageIcon className="w-3 h-3 text-[#656D4A]" />
+                                <span>
+                                  {t.attachments.length === 1
+                                    ? 'View Image'
+                                    : `View Images (${t.attachments.length})`}
+                                </span>
+                              </button>
+                            </div>
+                          )}
                         </td>
 
                         <td className="p-3 whitespace-nowrap">
@@ -1083,6 +1399,131 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
                 />
               </div>
 
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-zinc-700">
+                    Upload Photos{' '}
+                    <span className="font-normal text-zinc-400">
+                      (Optional · up to {MAX_TICKET_IMAGES} images)
+                    </span>
+                  </label>
+                  {formAttachments.length > 0 && (
+                    <span className="text-[11px] font-mono text-zinc-500 tabular-nums">
+                      {formAttachments.length}/{MAX_TICKET_IMAGES} attached
+                    </span>
+                  )}
+                </div>
+
+                <input
+                  ref={createFileInputRef}
+                  id="input-ticket-images"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => handleProcessCreateImageFiles(e.target.files)}
+                  className="hidden"
+                />
+
+                {formAttachments.length < MAX_TICKET_IMAGES && (
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => createFileInputRef.current?.click()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        createFileInputRef.current?.click();
+                      }
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragActive(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      setIsDragActive(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDragActive(false);
+                      handleProcessCreateImageFiles(e.dataTransfer.files);
+                    }}
+                    className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-colors ${
+                      isDragActive
+                        ? 'border-[#656D4A] bg-[#F7F8F5]'
+                        : 'border-zinc-300 hover:border-[#656D4A] bg-zinc-50/70 hover:bg-[#FAF9F5]'
+                    }`}
+                  >
+                    <div className="flex flex-col items-center gap-1.5">
+                      <div className="w-9 h-9 rounded-xl bg-white border border-zinc-200 text-[#656D4A] flex items-center justify-center">
+                        {isProcessingImages ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <ImagePlus className="w-4 h-4" />
+                        )}
+                      </div>
+                      <p className="text-xs font-bold text-zinc-800">
+                        {isProcessingImages
+                          ? 'Compressing & preparing photo(s)...'
+                          : 'Click to upload or drag & drop concern photos'}
+                      </p>
+                      <p className="text-[11px] text-zinc-500">
+                        PNG, JPG, or WebP · Automatically resized for fast upload
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {formAttachments.length > 0 && (
+                  <div className="grid grid-cols-3 gap-2.5 mt-2.5">
+                    {formAttachments.map((att, idx) => (
+                      <div
+                        key={att.id}
+                        className="relative group rounded-xl border border-zinc-200 bg-zinc-50 overflow-hidden"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openImageLightbox(
+                              formAttachments,
+                              idx,
+                              formSubject.trim() || 'New Ticket Photo Preview',
+                              `${formBranch} · Preview before submission`
+                            )
+                          }
+                          className="block w-full aspect-4/3 overflow-hidden cursor-pointer bg-zinc-100"
+                          title="Click to preview full image"
+                        >
+                          <img
+                            src={att.dataUrl}
+                            alt={att.name}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveCreateAttachment(att.id)}
+                          aria-label={`Remove ${att.name}`}
+                          title="Remove photo"
+                          className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-zinc-950/80 hover:bg-rose-600 text-white flex items-center justify-center cursor-pointer transition-colors"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                        <div className="px-2 py-1 text-[10px] text-zinc-600 flex items-center justify-between gap-1 bg-white border-t border-zinc-200">
+                          <span className="truncate font-medium" title={att.name}>
+                            {att.name}
+                          </span>
+                          <span className="font-mono text-zinc-400 shrink-0 tabular-nums">
+                            {formatBytes(att.sizeBytes)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="bg-[#FAF9F5] border border-zinc-200 rounded-xl p-3 text-[11px] text-zinc-600 flex items-center justify-between gap-2">
                 <span>
                   Submitted by <strong className="text-zinc-900">{currentUser.name}</strong> (
@@ -1094,7 +1535,7 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
               <div className="flex justify-end gap-2 pt-3 border-t border-zinc-200">
                 <button
                   type="button"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isProcessingImages}
                   onClick={() => setShowCreateModal(false)}
                   className="px-4 py-2 text-xs font-bold text-zinc-600 rounded-xl hover:bg-zinc-100 cursor-pointer disabled:opacity-50"
                 >
@@ -1103,10 +1544,14 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
                 <button
                   id="btn-submit-new-ticket"
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isProcessingImages}
                   className="px-5 py-2 bg-[#656D4A] hover:bg-[#4A543E] text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer disabled:opacity-60"
                 >
-                  {isSubmitting ? 'Submitting...' : 'Submit Ticket'}
+                  {isSubmitting
+                    ? 'Submitting...'
+                    : isProcessingImages
+                    ? 'Processing Images...'
+                    : 'Submit Ticket'}
                 </button>
               </div>
             </form>
@@ -1221,6 +1666,162 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
                 {selectedTicket.description}
               </div>
             </div>
+
+            {/* Attached Photos Section */}
+            {(() => {
+              const ticketImages = Array.isArray(selectedTicket.attachments)
+                ? selectedTicket.attachments
+                : [];
+              const canEditTicketImages =
+                Boolean(onUpdateTicketAttachments) &&
+                (isAdmin ||
+                  (selectedTicket.requestedByEmployeeId === currentUser.employeeId &&
+                    selectedTicket.status !== 'DONE' &&
+                    selectedTicket.status !== 'CANCELLED'));
+
+              if (ticketImages.length === 0 && !canEditTicketImages) {
+                return null;
+              }
+
+              return (
+                <div className="space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-xs font-bold text-zinc-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <ImageIcon className="w-3.5 h-3.5 text-[#656D4A]" />
+                      <span>
+                        Attached Photos ({ticketImages.length}/{MAX_TICKET_IMAGES})
+                      </span>
+                    </h3>
+
+                    {canEditTicketImages && ticketImages.length < MAX_TICKET_IMAGES && (
+                      <>
+                        <input
+                          ref={detailFileInputRef}
+                          id="input-detail-ticket-images"
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(e) =>
+                            handleAddDetailImages(selectedTicket, e.target.files)
+                          }
+                          className="hidden"
+                        />
+                        <button
+                          id="btn-add-ticket-photo"
+                          type="button"
+                          disabled={isUpdatingDetailImages}
+                          onClick={() => detailFileInputRef.current?.click()}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-300 bg-white hover:bg-[#F7F8F5] text-zinc-800 text-[11px] font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {isUpdatingDetailImages ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-[#656D4A]" />
+                          ) : (
+                            <ImagePlus className="w-3.5 h-3.5 text-[#656D4A]" />
+                          )}
+                          <span>
+                            {isUpdatingDetailImages ? 'Uploading...' : 'Upload Photo'}
+                          </span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {ticketImages.length === 0 ? (
+                    <div className="p-4 rounded-xl border border-dashed border-zinc-300 bg-zinc-50/70 text-center text-xs text-zinc-500">
+                      No photos attached yet. Click &quot;Upload Photo&quot; to attach up to{' '}
+                      {MAX_TICKET_IMAGES} images for Admin review.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {ticketImages.map((att, idx) => {
+                        const valid = isSafeImageSrc(att.dataUrl) && !brokenImageIds[att.id];
+                        return (
+                          <div
+                            key={att.id}
+                            className="group relative rounded-xl border border-zinc-200 bg-white overflow-hidden"
+                          >
+                            {valid ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openImageLightbox(
+                                    ticketImages,
+                                    idx,
+                                    `${selectedTicket.ticketNumber} · ${selectedTicket.subject}`,
+                                    `${selectedTicket.branch} · Submitted by ${selectedTicket.requestedByName}`
+                                  )
+                                }
+                                className="relative block w-full aspect-4/3 overflow-hidden bg-zinc-100 cursor-pointer"
+                                title="Click to view full photo"
+                              >
+                                <img
+                                  src={att.dataUrl}
+                                  alt={att.name}
+                                  referrerPolicy="no-referrer"
+                                  onError={() =>
+                                    setBrokenImageIds((prev) => ({
+                                      ...prev,
+                                      [att.id]: true,
+                                    }))
+                                  }
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                                />
+                                <span className="absolute inset-0 bg-black/0 group-hover:bg-black/35 transition-colors flex items-center justify-center">
+                                  <span className="opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-950/85 text-white text-[11px] font-bold">
+                                    <ZoomIn className="w-3.5 h-3.5" />
+                                    <span>View Photo</span>
+                                  </span>
+                                </span>
+                              </button>
+                            ) : (
+                              <div className="w-full aspect-4/3 bg-zinc-100 flex flex-col items-center justify-center text-zinc-400 text-[11px] gap-1 p-2">
+                                <ImageIcon className="w-5 h-5" />
+                                <span>Image unavailable</span>
+                              </div>
+                            )}
+
+                            {canEditTicketImages && (
+                              <button
+                                type="button"
+                                disabled={isUpdatingDetailImages}
+                                onClick={() =>
+                                  handleRemoveDetailImage(selectedTicket, att.id)
+                                }
+                                title="Remove photo"
+                                aria-label={`Remove ${att.name}`}
+                                className="absolute top-2 right-2 w-6 h-6 rounded-full bg-zinc-950/75 hover:bg-rose-600 text-white flex items-center justify-center cursor-pointer disabled:opacity-50"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            <div className="px-2.5 py-1.5 border-t border-zinc-200 flex items-center justify-between gap-2 text-[10px] text-zinc-600 bg-zinc-50/70">
+                              <span className="truncate font-semibold" title={att.name}>
+                                {att.name}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openImageLightbox(
+                                    ticketImages,
+                                    idx,
+                                    `${selectedTicket.ticketNumber} · ${selectedTicket.subject}`,
+                                    `${selectedTicket.branch} · Submitted by ${selectedTicket.requestedByName}`
+                                  )
+                                }
+                                className="text-[#4A543E] hover:text-zinc-950 font-bold whitespace-nowrap cursor-pointer shrink-0"
+                              >
+                                View
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Admin Resolution Form (Admin Only) OR Read-only Admin Notes (All Other Users) */}
             {isAdmin ? (
@@ -1420,6 +2021,196 @@ export const StoreTicketingDashboard: React.FC<StoreTicketingDashboardProps> = (
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* FULL-SCREEN IMAGE VIEWER LIGHTBOX MODAL */}
+      {lightboxState && lightboxState.images[lightboxState.index] && (
+        <div
+          id="ticket-image-lightbox"
+          onClick={() => setLightboxState(null)}
+          className="fixed inset-0 z-[70] bg-black/90 backdrop-blur-xs flex flex-col justify-between p-3 sm:p-5"
+        >
+          {/* Lightbox Top Bar */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex flex-wrap items-center justify-between gap-3 text-white bg-zinc-950/85 border border-zinc-800 rounded-xl px-4 py-2.5"
+          >
+            <div className="min-w-0">
+              <div className="text-xs sm:text-sm font-bold truncate">
+                {lightboxState.title}
+              </div>
+              <div className="text-[11px] text-zinc-400 flex flex-wrap items-center gap-2">
+                {lightboxState.subtitle && <span>{lightboxState.subtitle}</span>}
+                <span aria-hidden="true">·</span>
+                <span className="truncate max-w-[220px]">
+                  {lightboxState.images[lightboxState.index].name}
+                </span>
+                {lightboxState.images.length > 1 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="font-mono tabular-nums text-amber-400 font-bold">
+                      {lightboxState.index + 1} / {lightboxState.images.length}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setLightboxZoom((z) => Math.max(0.75, +(z - 0.25).toFixed(2)))}
+                className="p-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-200 cursor-pointer"
+                title="Zoom Out"
+                aria-label="Zoom out"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+              <span className="text-xs font-mono tabular-nums px-2 text-zinc-300 min-w-[48px] text-center">
+                {Math.round(lightboxZoom * 100)}%
+              </span>
+              <button
+                type="button"
+                onClick={() => setLightboxZoom((z) => Math.min(2.5, +(z + 0.25).toFixed(2)))}
+                className="p-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-200 cursor-pointer"
+                title="Zoom In"
+                aria-label="Zoom in"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightboxZoom(1)}
+                className="p-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-200 cursor-pointer"
+                title="Reset Zoom"
+                aria-label="Reset zoom"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+              {isSafeImageSrc(lightboxState.images[lightboxState.index].dataUrl) && (
+                <a
+                  href={lightboxState.images[lightboxState.index].dataUrl}
+                  download={lightboxState.images[lightboxState.index].name || 'ticket-photo.jpg'}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-zinc-950 text-xs font-bold cursor-pointer whitespace-nowrap"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Download</span>
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={() => setLightboxState(null)}
+                className="p-2 rounded-lg bg-zinc-900 hover:bg-rose-600 text-white cursor-pointer"
+                title="Close viewer (Esc)"
+                aria-label="Close image viewer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Center Image Viewport */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative flex-1 flex items-center justify-center overflow-auto my-3"
+          >
+            {lightboxState.images.length > 1 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setLightboxZoom(1);
+                  setLightboxState((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          index:
+                            (prev.index - 1 + prev.images.length) % prev.images.length,
+                        }
+                      : null
+                  );
+                }}
+                className="absolute left-2 sm:left-4 z-10 w-10 h-10 rounded-full bg-zinc-950/80 hover:bg-zinc-800 border border-zinc-700 text-white flex items-center justify-center cursor-pointer"
+                aria-label="Previous image"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+            )}
+
+            <div className="max-h-full max-w-full flex items-center justify-center p-2">
+              {isSafeImageSrc(lightboxState.images[lightboxState.index].dataUrl) ? (
+                <img
+                  src={lightboxState.images[lightboxState.index].dataUrl}
+                  alt={lightboxState.images[lightboxState.index].name}
+                  referrerPolicy="no-referrer"
+                  style={{
+                    transform: `scale(${lightboxZoom})`,
+                    transformOrigin: 'center center',
+                  }}
+                  className="max-h-[72vh] max-w-[90vw] object-contain rounded-xl shadow-2xl transition-transform duration-150 bg-zinc-950"
+                />
+              ) : (
+                <div className="p-8 rounded-xl bg-zinc-900 text-zinc-300 text-xs flex flex-col items-center gap-2">
+                  <ImageIcon className="w-6 h-6" />
+                  <span>Unable to display image</span>
+                </div>
+              )}
+            </div>
+
+            {lightboxState.images.length > 1 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setLightboxZoom(1);
+                  setLightboxState((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          index: (prev.index + 1) % prev.images.length,
+                        }
+                      : null
+                  );
+                }}
+                className="absolute right-2 sm:right-4 z-10 w-10 h-10 rounded-full bg-zinc-950/80 hover:bg-zinc-800 border border-zinc-700 text-white flex items-center justify-center cursor-pointer"
+                aria-label="Next image"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+
+          {/* Bottom Thumbnail Strip */}
+          {lightboxState.images.length > 1 && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex items-center justify-center gap-2 overflow-x-auto pb-1"
+            >
+              {lightboxState.images.map((att, idx) => (
+                <button
+                  key={att.id}
+                  type="button"
+                  onClick={() => {
+                    setLightboxZoom(1);
+                    setLightboxState((prev) =>
+                      prev ? { ...prev, index: idx } : null
+                    );
+                  }}
+                  className={`w-14 h-14 rounded-lg overflow-hidden border-2 cursor-pointer shrink-0 transition-all ${
+                    idx === lightboxState.index
+                      ? 'border-amber-400 scale-105'
+                      : 'border-zinc-700 opacity-60 hover:opacity-100'
+                  }`}
+                >
+                  <img
+                    src={att.dataUrl}
+                    alt={att.name}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                  />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
