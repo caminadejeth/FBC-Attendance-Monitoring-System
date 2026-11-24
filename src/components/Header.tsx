@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { User, UserRole } from '../types';
+import { AdminEmailSettings, User, UserRole } from '../types';
 import {
   LogOut,
   Shield,
@@ -14,8 +14,10 @@ import {
   Clock,
   CalendarClock,
   RotateCcw,
+  Mail,
 } from 'lucide-react';
 import { YellowCabPlateLogo, YellowCabCheckerboard } from './YellowCabBrand';
+import { GoogleSignInButton } from './GoogleSignInButton';
 import {
   AdminAlertItem,
   AdminAlertSeverity,
@@ -37,6 +39,16 @@ interface HeaderProps {
   onDismissAlert?: (alertId: string) => void;
   onMarkAllAlertsRead?: () => void;
   onRestoreDismissedAlerts?: () => void;
+  emailSettings?: AdminEmailSettings;
+  gmailNeedsAuth?: boolean;
+  gmailConnectedEmail?: string | null;
+  isGmailSigningIn?: boolean;
+  isSendingAlertEmail?: boolean;
+  onConnectGmail?: () => void;
+  onSendAlertEmails?: (
+    alerts: AdminAlertItem[],
+    options?: { isTest?: boolean; label?: string }
+  ) => void;
 }
 
 type PopoverFilter = 'ALL' | 'WAREHOUSE' | 'DISPUTE' | 'ATTENDANCE';
@@ -53,6 +65,13 @@ export const Header: React.FC<HeaderProps> = ({
   onDismissAlert,
   onMarkAllAlertsRead,
   onRestoreDismissedAlerts,
+  emailSettings,
+  gmailNeedsAuth = true,
+  gmailConnectedEmail,
+  isGmailSigningIn = false,
+  isSendingAlertEmail = false,
+  onConnectGmail,
+  onSendAlertEmails,
 }) => {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [filter, setFilter] = useState<PopoverFilter>('ALL');
@@ -331,6 +350,47 @@ export const Header: React.FC<HeaderProps> = ({
                       ))}
                     </div>
 
+                    {/* Super Admin Gmail Alert Quick Strip */}
+                    {emailSettings && (
+                      <div className="px-3 py-2 bg-amber-50/70 border-b border-amber-200/80 flex items-center justify-between gap-2 flex-wrap text-[11px]">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Mail className="w-3.5 h-3.5 text-amber-800 shrink-0" />
+                          <span className="font-bold text-zinc-800 truncate">
+                            {emailSettings.recipientEmail}
+                          </span>
+                          {gmailConnectedEmail && !gmailNeedsAuth && (
+                            <span className="text-[10px] font-bold text-emerald-700 whitespace-nowrap">
+                              · Gmail Ready
+                            </span>
+                          )}
+                        </div>
+                        {gmailNeedsAuth ? (
+                          onConnectGmail && (
+                            <GoogleSignInButton
+                              compact
+                              disabled={isGmailSigningIn}
+                              label={isGmailSigningIn ? 'Connecting...' : 'Sign in with Google'}
+                              onClick={onConnectGmail}
+                            />
+                          )
+                        ) : (
+                          onSendAlertEmails && (
+                            <button
+                              type="button"
+                              disabled={isSendingAlertEmail || filteredAlerts.length === 0}
+                              onClick={() => onSendAlertEmails(filteredAlerts)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-amber-400 text-[11px] font-bold cursor-pointer disabled:opacity-40 whitespace-nowrap shrink-0"
+                            >
+                              <Mail className="w-3 h-3" />
+                              {isSendingAlertEmail
+                                ? 'Sending...'
+                                : `Email Alerts (${filteredAlerts.length})`}
+                            </button>
+                          )
+                        )}
+                      </div>
+                    )}
+
                     {/* Alert Items List */}
                     <div className="max-h-[360px] overflow-y-auto divide-y divide-zinc-100">
                       {filteredAlerts.length === 0 ? (
@@ -404,17 +464,31 @@ export const Header: React.FC<HeaderProps> = ({
                                 </button>
                               </div>
 
-                              {onDismissAlert && (
-                                <button
-                                  type="button"
-                                  onClick={() => onDismissAlert(alert.id)}
-                                  title="Dismiss alert"
-                                  aria-label={`Dismiss alert ${alert.title}`}
-                                  className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 hover:bg-zinc-200/60 transition-colors cursor-pointer shrink-0"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </button>
-                              )}
+                              <div className="flex items-center gap-1 shrink-0">
+                                {!gmailNeedsAuth && onSendAlertEmails && (
+                                  <button
+                                    type="button"
+                                    disabled={isSendingAlertEmail}
+                                    onClick={() => onSendAlertEmails([alert])}
+                                    title={`Email this alert to ${emailSettings?.recipientEmail || 'Super Admin'}`}
+                                    aria-label={`Email alert ${alert.title}`}
+                                    className="p-1 rounded-md text-amber-800 hover:text-zinc-950 hover:bg-amber-100 transition-colors cursor-pointer disabled:opacity-40 shrink-0"
+                                  >
+                                    <Mail className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                {onDismissAlert && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onDismissAlert(alert.id)}
+                                    title="Dismiss alert"
+                                    aria-label={`Dismiss alert ${alert.title}`}
+                                    className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 hover:bg-zinc-200/60 transition-colors cursor-pointer shrink-0"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           );
                         })

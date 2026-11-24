@@ -2,22 +2,17 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ActivityActionType,
   ActivityLog,
-  AdminEmailNotificationConfig,
+  AdminEmailAlertCategory,
+  AdminEmailSettings,
   AttendanceStatus,
   AttendanceSummaryDaily,
   BiometricPunch,
   CtoManualAdjustment,
   CtoRequest,
   DisputeRequest,
-  EmailedAdminAlertRecord,
   StockMovementEntry,
   StockTransferLineItem,
   StockTransferRequisition,
-  StoreTicket,
-  StoreTicketAttachment,
-  StoreTicketCategory,
-  StoreTicketPriority,
-  StoreTicketStatus,
   SyncLog,
   User,
   UserRole,
@@ -31,7 +26,6 @@ import {
   calculateGrossHours,
   getDayOfWeekName,
 } from './utils/timeFormatters';
-import { isSafeImageSrc } from './utils/imageCompression';
 import {
   INITIAL_DAILY_SUMMARIES,
   INITIAL_DISPUTES,
@@ -50,25 +44,34 @@ import { StaffDashboard } from './components/StaffDashboard';
 import { ManagerDashboard } from './components/ManagerDashboard';
 import { PayrollDashboard } from './components/PayrollDashboard';
 import { WarehouseInventoryDashboard } from './components/WarehouseInventoryDashboard';
-import { StoreTicketingDashboard } from './components/StoreTicketingDashboard';
 import { GoogleSheetsSyncModal } from './components/GoogleSheetsSyncModal';
 import { buildGoogleSheetsData, syncToGoogleSheets } from './utils/googleSheetsSync';
-import { showAdminAlertToast, showSyncConfirmAlert } from './utils/sweetAlerts';
 import {
-  ALL_ADMIN_ALERT_CATEGORIES,
+  showActionSuccessToast,
+  showAdminAlertToast,
+  showErrorAlert,
+  showSyncConfirmAlert,
+  yellowCabSwal,
+} from './utils/sweetAlerts';
+import {
+  AdminAlertItem,
   buildAdminAlerts,
-  DEFAULT_ADMIN_ALERT_EMAIL,
-  DEFAULT_ADMIN_EMAIL_CONFIG,
-  EmailDeliveryStatusResponse,
-  fetchEmailDeliveryStatus,
   loadAdminDismissedAlertIds,
   loadAdminReadAlertIds,
   saveAdminDismissedAlertIds,
   saveAdminReadAlertIds,
-  sendAdminAlertEmails,
-  SendAdminAlertEmailsResult,
-  toSafeAlertDocId,
 } from './utils/adminAlerts';
+import {
+  DEFAULT_SUPER_ADMIN_ALERT_EMAIL,
+  GmailAuthExpiredError,
+  getConnectedGmailAddress,
+  getGmailAccessToken,
+  googleSignInForGmail,
+  initGmailAuth,
+  isValidEmailAddress,
+  logoutGmailAuth,
+  sendGmailAlertEmail,
+} from './utils/gmailAlerts';
 import {
   buildDefaultCatalogItemsForBranch,
   buildDefaultWarehouseCategories,
@@ -86,18 +89,20 @@ import {
   removeDocument,
   isWarehouseCatalogSeeded,
   markWarehouseCatalogSeeded,
+  clearCollectionCache,
+  safeLocalStorageGet,
+  safeLocalStorageRemove,
   safeLocalStorageSet,
-  safeCacheCollectionItems,
 } from './lib/firestoreSync';
 
 const loadFromStorage = <T,>(key: string, fallback: T): T => {
   try {
-    const saved = localStorage.getItem(key);
+    const saved = safeLocalStorageGet(key);
     if (saved) {
       return JSON.parse(saved);
     }
-  } catch (err) {
-    console.error(`Failed to load ${key} from localStorage`, err);
+  } catch {
+    // Ignore invalid local cache; Firestore / IndexedDB hydrates live state
   }
   return fallback;
 };
@@ -129,7 +134,7 @@ export default function App() {
     loadFromStorage<CtoManualAdjustment[]>('fbc_cto_adjustments', INITIAL_CTO_ADJUSTMENTS)
   );
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>(() =>
-    loadFromStorage<ActivityLog[]>('fbc_activity_logs', INITIAL_ACTIVITY_LOGS)
+    loadFromStorage<ActivityLog[]>('fbc_activityLogs', INITIAL_ACTIVITY_LOGS)
   );
   const [warehouseCategories, setWarehouseCategories] = useState<WarehouseCategory[]>(() =>
     loadFromStorage<WarehouseCategory[]>('fbc_warehouseCategories', [])
@@ -143,31 +148,7 @@ export default function App() {
   const [stockTransfers, setStockTransfers] = useState<StockTransferRequisition[]>(() =>
     loadFromStorage<StockTransferRequisition[]>('fbc_stockTransfers', [])
   );
-  const [storeTickets, setStoreTickets] = useState<StoreTicket[]>(() =>
-    loadFromStorage<StoreTicket[]>('fbc_storeTickets', [])
-  );
-  const [adminEmailSettingsList, setAdminEmailSettingsList] = useState<
-    AdminEmailNotificationConfig[]
-  >(() =>
-    loadFromStorage<AdminEmailNotificationConfig[]>(
-      'fbc_adminNotificationSettings',
-      [{ ...DEFAULT_ADMIN_EMAIL_CONFIG, updatedAt: new Date().toISOString() }]
-    )
-  );
-  const [emailedAlerts, setEmailedAlerts] = useState<EmailedAdminAlertRecord[]>(() =>
-    loadFromStorage<EmailedAdminAlertRecord[]>('fbc_emailedAlerts', [])
-  );
-  const [emailDeliveryStatus, setEmailDeliveryStatus] =
-    useState<EmailDeliveryStatusResponse>({
-      configured: false,
-      provider: 'none',
-      defaultRecipient: DEFAULT_ADMIN_ALERT_EMAIL,
-    });
-
-  // Check server-side email transport readiness on mount
-  useEffect(() => {
-    fetchEmailDeliveryStatus().then(setEmailDeliveryStatus);
-  }, []);
+  const [adminEmailSettingsList, setAdminEmailSettingsList] = useState<AdminEmailSettings[]>([]);
 
   // Real-Time Firebase Firestore Cloud Database Subscriptions across all devices/users
   useEffect(() => {
@@ -183,17 +164,7 @@ export default function App() {
     const unsubWarehouseItems = subscribeCollection<WarehouseInventoryItem>('warehouseItems', [], setWarehouseItems);
     const unsubStockMovements = subscribeCollection<StockMovementEntry>('stockMovements', [], setStockMovements);
     const unsubStockTransfers = subscribeCollection<StockTransferRequisition>('stockTransfers', [], setStockTransfers);
-    const unsubStoreTickets = subscribeCollection<StoreTicket>('storeTickets', [], setStoreTickets);
-    const unsubEmailSettings = subscribeCollection<AdminEmailNotificationConfig>(
-      'adminNotificationSettings',
-      [{ ...DEFAULT_ADMIN_EMAIL_CONFIG, updatedAt: new Date().toISOString() }],
-      setAdminEmailSettingsList
-    );
-    const unsubEmailedAlerts = subscribeCollection<EmailedAdminAlertRecord>(
-      'emailedAlerts',
-      [],
-      setEmailedAlerts
-    );
+    const unsubEmailSettings = subscribeCollection<AdminEmailSettings>('adminEmailSettings', [], setAdminEmailSettingsList);
 
     // One-time default warehouse catalog & categories seed to Firestore if not yet initialized
     (async () => {
@@ -224,9 +195,7 @@ export default function App() {
       unsubWarehouseItems();
       unsubStockMovements();
       unsubStockTransfers();
-      unsubStoreTickets();
       unsubEmailSettings();
-      unsubEmailedAlerts();
     };
   }, []);
 
@@ -256,35 +225,19 @@ export default function App() {
       await removeDocument('activityLogs', log.id);
     }
     setActivityLogs([]);
-    try {
-      localStorage.removeItem('fbc_activity_logs');
-      localStorage.removeItem('fbc_deleted_activityLogs');
-    } catch (e) {
-      console.error(e);
-    }
+    await clearCollectionCache('activityLogs');
   };
 
-  // Keep currentUser synced with live Firestore updates to their own account
+  // Sync current logged-in user session to localStorage safely
   useEffect(() => {
-    if (!currentUser) return;
-    const latest = users.find((u) => u.id === currentUser.id);
-    if (latest && JSON.stringify(latest) !== JSON.stringify(currentUser)) {
-      setCurrentUser(latest);
-    }
-  }, [users, currentUser]);
-
-  // Sync current logged-in user session to localStorage
-  useEffect(() => {
-    try {
-      if (currentUser) {
-        safeLocalStorageSet('fbc_current_user', JSON.stringify(currentUser), {
-          essential: true,
-        });
-      } else {
-        localStorage.removeItem('fbc_current_user');
+    if (currentUser) {
+      const saved = safeLocalStorageSet('fbc_current_user', JSON.stringify(currentUser));
+      if (!saved && currentUser.avatarUrl) {
+        const { avatarUrl: _ignored, ...compactUser } = currentUser;
+        safeLocalStorageSet('fbc_current_user', JSON.stringify(compactUser));
       }
-    } catch {
-      // Ignore storage access errors
+    } else {
+      safeLocalStorageRemove('fbc_current_user');
     }
   }, [currentUser]);
 
@@ -365,20 +318,6 @@ export default function App() {
     setDismissedAlertIds(loadAdminDismissedAlertIds(currentUser?.id));
   }, [currentUser?.id]);
 
-  const adminEmailConfig: AdminEmailNotificationConfig = useMemo(() => {
-    const saved = adminEmailSettingsList.find((s) => s.id === 'superadmin');
-    if (!saved) return DEFAULT_ADMIN_EMAIL_CONFIG;
-    return {
-      ...DEFAULT_ADMIN_EMAIL_CONFIG,
-      ...saved,
-      recipientEmail: saved.recipientEmail?.trim() || DEFAULT_ADMIN_ALERT_EMAIL,
-      enabledCategories:
-        Array.isArray(saved.enabledCategories) && saved.enabledCategories.length > 0
-          ? saved.enabledCategories
-          : [...ALL_ADMIN_ALERT_CATEGORIES],
-    };
-  }, [adminEmailSettingsList]);
-
   const allAdminAlerts = useMemo(
     () =>
       buildAdminAlerts({
@@ -387,9 +326,8 @@ export default function App() {
         disputes,
         ctoRequests,
         summaries,
-        storeTickets,
       }),
-    [stockTransfers, warehouseItems, disputes, ctoRequests, summaries, storeTickets]
+    [stockTransfers, warehouseItems, disputes, ctoRequests, summaries]
   );
 
   const monitoredNearExpiryEntries = useMemo(
@@ -446,134 +384,268 @@ export default function App() {
     if (currentUser?.id) saveAdminDismissedAlertIds(currentUser.id, empty);
   };
 
-  const handleSaveAdminEmailConfig = async (
-    updated: AdminEmailNotificationConfig
-  ): Promise<boolean> => {
-    const nextConfig: AdminEmailNotificationConfig = {
-      ...updated,
-      id: 'superadmin',
-      recipientEmail: updated.recipientEmail.trim() || DEFAULT_ADMIN_ALERT_EMAIL,
+  // Super Admin Gmail Email Notifications State (tokens stored strictly in memory)
+  const [gmailNeedsAuth, setGmailNeedsAuth] = useState<boolean>(true);
+  const [gmailConnectedEmail, setGmailConnectedEmail] = useState<string | null>(null);
+  const [isGmailSigningIn, setIsGmailSigningIn] = useState<boolean>(false);
+  const [isSendingAlertEmail, setIsSendingAlertEmail] = useState<boolean>(false);
+  const emailedAlertIdsRef = useRef<Set<string>>(new Set());
+
+  const ALL_EMAIL_CATEGORIES: AdminEmailAlertCategory[] = [
+    'STR',
+    'LOW_STOCK',
+    'NEAR_EXPIRY',
+    'DISPUTE',
+    'CTO',
+    'ATTENDANCE',
+  ];
+
+  const adminEmailSettings: AdminEmailSettings = useMemo(() => {
+    const stored = adminEmailSettingsList.find((s) => s.id === 'super-admin-email-alerts');
+    if (stored) {
+      return {
+        ...stored,
+        recipientEmail: stored.recipientEmail || DEFAULT_SUPER_ADMIN_ALERT_EMAIL,
+        categories:
+          Array.isArray(stored.categories) && stored.categories.length > 0
+            ? stored.categories
+            : ALL_EMAIL_CATEGORIES,
+      };
+    }
+    return {
+      id: 'super-admin-email-alerts',
+      recipientEmail: DEFAULT_SUPER_ADMIN_ALERT_EMAIL,
+      enabled: true,
+      autoSendOnNewAlert: false,
+      categories: ALL_EMAIL_CATEGORIES,
+      updatedAt: new Date().toISOString(),
+    };
+  }, [adminEmailSettingsList]);
+
+  useEffect(() => {
+    const unsubscribe = initGmailAuth(
+      (fbUser) => {
+        setGmailNeedsAuth(false);
+        setGmailConnectedEmail(fbUser.email || getConnectedGmailAddress());
+      },
+      () => {
+        setGmailNeedsAuth(true);
+        setGmailConnectedEmail(getConnectedGmailAddress());
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  const handleConnectGmail = async () => {
+    if (currentUser?.role !== 'ADMIN') return;
+    setIsGmailSigningIn(true);
+    try {
+      const res = await googleSignInForGmail();
+      if (res) {
+        setGmailNeedsAuth(false);
+        setGmailConnectedEmail(res.user.email || getConnectedGmailAddress());
+        showActionSuccessToast(
+          `Gmail connected${res.user.email ? ` (${res.user.email})` : ''}`
+        );
+      }
+    } catch (err: any) {
+      console.error('Gmail Google Sign-In error:', err);
+      const code = err?.code || '';
+      if (code !== 'auth/popup-closed-by-user') {
+        showErrorAlert(
+          'Google Sign-In Failed',
+          err?.message || 'Could not connect Gmail for Super Admin alerts.'
+        );
+      }
+    } finally {
+      setIsGmailSigningIn(false);
+    }
+  };
+
+  const handleDisconnectGmail = async () => {
+    await logoutGmailAuth();
+    setGmailNeedsAuth(true);
+    setGmailConnectedEmail(null);
+    if (adminEmailSettings.autoSendOnNewAlert) {
+      const updated: AdminEmailSettings = {
+        ...adminEmailSettings,
+        autoSendOnNewAlert: false,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser?.name || 'Super Admin',
+      };
+      await saveDocument('adminEmailSettings', updated);
+      setAdminEmailSettingsList((prev) => {
+        const exists = prev.some((s) => s.id === updated.id);
+        return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
+      });
+    }
+    showActionSuccessToast('Gmail session disconnected');
+  };
+
+  const handleUpdateAdminEmailSettings = async (patch: Partial<AdminEmailSettings>) => {
+    if (currentUser?.role !== 'ADMIN') return;
+
+    if (patch.recipientEmail !== undefined && !isValidEmailAddress(patch.recipientEmail)) {
+      showErrorAlert(
+        'Invalid Email Address',
+        'Please enter a valid recipient email address (e.g. caminadejeth@gmail.com).'
+      );
+      return;
+    }
+
+    if (patch.autoSendOnNewAlert === true && !adminEmailSettings.autoSendOnNewAlert) {
+      const targetRecipient = (patch.recipientEmail || adminEmailSettings.recipientEmail).trim();
+      const confirmAuto = await yellowCabSwal.fire({
+        icon: 'question',
+        title: 'Enable Auto-Email on New Alerts?',
+        html: `<div style="font-size:13px;text-align:left;line-height:1.5;">
+          When Gmail is connected in this session, any newly arriving Super Admin alert in your selected categories will be automatically emailed to <strong>${targetRecipient}</strong>.<br/><br/>
+          <span style="font-size:12px;color:#52525b;">You can disable this anytime in Admin Alert Notifications.</span>
+        </div>`,
+        showCancelButton: true,
+        confirmButtonText: 'Enable Auto-Email',
+        cancelButtonText: 'Keep Manual Only',
+      });
+      if (!confirmAuto.isConfirmed) return;
+    }
+
+    const updated: AdminEmailSettings = {
+      ...adminEmailSettings,
+      ...patch,
+      id: 'super-admin-email-alerts',
+      recipientEmail: (patch.recipientEmail ?? adminEmailSettings.recipientEmail).trim(),
       updatedAt: new Date().toISOString(),
       updatedBy: currentUser?.name || 'Super Admin',
     };
-    const ok = await saveDocument('adminNotificationSettings', nextConfig);
-    if (!ok) return false;
-    setAdminEmailSettingsList([nextConfig]);
-    safeLocalStorageSet('fbc_adminNotificationSettings', JSON.stringify([nextConfig]), {
-      essential: true,
+
+    await saveDocument('adminEmailSettings', updated);
+    setAdminEmailSettingsList((prev) => {
+      const exists = prev.some((s) => s.id === updated.id);
+      return exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
     });
-    logActivity(
-      'SYSTEM_EVENT',
-      `Updated Super Admin automatic email notification settings (${nextConfig.enabled ? 'ENABLED' : 'PAUSED'} → ${nextConfig.recipientEmail}).`,
-      'System'
-    );
-    return true;
+    showActionSuccessToast('Super Admin email notification settings saved');
   };
 
-  const handleSendTestAdminEmail = async (
-    recipientEmail: string
-  ): Promise<SendAdminAlertEmailsResult> => {
-    const targetEmail = recipientEmail.trim() || adminEmailConfig.recipientEmail || DEFAULT_ADMIN_ALERT_EMAIL;
-    const res = await sendAdminAlertEmails({
-      alerts: [
-        {
-          id: `test-${Date.now()}`,
-          category: 'TICKET',
-          severity: 'info',
-          title: 'FBC Super Admin Email Notification Test',
-          description: `Automatic alert email notifications are configured for ${targetEmail}. Currently ${allAdminAlerts.length} active alert(s) exist in the portal.`,
-          meta: 'Triggered manually from Admin Alert Notifications',
-          timestamp: new Date().toISOString(),
-          targetTab: 'overview',
-          actionLabel: 'Open Dashboard',
-        },
-      ],
-      recipientEmail: targetEmail,
-      isTest: true,
-      triggeredBy: currentUser?.name || 'Super Admin',
-    });
-
-    const refreshedStatus = await fetchEmailDeliveryStatus();
-    setEmailDeliveryStatus(refreshedStatus);
-
-    const statusUpdate: AdminEmailNotificationConfig = {
-      ...adminEmailConfig,
-      id: 'superadmin',
-      recipientEmail: targetEmail,
-      updatedAt: new Date().toISOString(),
-      lastSentAt: res.success ? new Date().toISOString() : adminEmailConfig.lastSentAt,
-      lastStatus: res.success
-        ? 'SENT'
-        : res.code === 'EMAIL_NOT_CONFIGURED'
-        ? 'NOT_CONFIGURED'
-        : 'ERROR',
-      lastError: res.success ? '' : res.message || res.error || 'Delivery failed',
-    };
-    await saveDocument('adminNotificationSettings', statusUpdate);
-    setAdminEmailSettingsList([statusUpdate]);
-    return res;
-  };
-
-  const handleEmailActiveAlertsNow = async (): Promise<SendAdminAlertEmailsResult> => {
-    const enabledCats = new Set(adminEmailConfig.enabledCategories || ALL_ADMIN_ALERT_CATEGORIES);
-    const matching = visibleAdminAlerts.filter((a) => enabledCats.has(a.category));
-    if (matching.length === 0) {
-      return {
-        success: false,
-        error: 'No active alerts match the selected email notification categories.',
-      };
+  const handleSendAdminEmailAlerts = async (
+    alertsToSend: AdminAlertItem[],
+    options?: { isTest?: boolean; label?: string }
+  ) => {
+    if (currentUser?.role !== 'ADMIN') return;
+    const recipient = (adminEmailSettings.recipientEmail || '').trim();
+    if (!isValidEmailAddress(recipient)) {
+      showErrorAlert(
+        'Invalid Recipient Email',
+        'Set a valid Super Admin recipient email (e.g. caminadejeth@gmail.com) first.'
+      );
+      return;
     }
 
-    const res = await sendAdminAlertEmails({
-      alerts: matching.slice(0, 25),
-      recipientEmail: adminEmailConfig.recipientEmail || DEFAULT_ADMIN_ALERT_EMAIL,
-      isTest: true,
-      triggeredBy: `${currentUser?.name || 'Super Admin'} (Manual Digest)`,
+    const token = getGmailAccessToken();
+    if (!token || gmailNeedsAuth) {
+      setGmailNeedsAuth(true);
+      showErrorAlert(
+        'Connect Gmail First',
+        'Click "Sign in with Google" in Admin Alert Notifications to authorize Gmail sending for this session.'
+      );
+      return;
+    }
+
+    const isTest = Boolean(options?.isTest);
+    if (!isTest && alertsToSend.length === 0) {
+      showErrorAlert('No Alerts to Send', 'There are currently no matching alerts to email.');
+      return;
+    }
+
+    const previewItems = alertsToSend
+      .slice(0, 5)
+      .map((a) => `<li><strong>[${a.severity.toUpperCase()}]</strong> ${a.title}</li>`)
+      .join('');
+    const remainingCount = Math.max(0, alertsToSend.length - 5);
+
+    const confirmSend = await yellowCabSwal.fire({
+      icon: 'question',
+      title: isTest
+        ? 'Send Test Gmail Alert?'
+        : `Email ${alertsToSend.length} Alert${alertsToSend.length === 1 ? '' : 's'} via Gmail?`,
+      html: `<div style="font-size:13px;text-align:left;line-height:1.5;">
+        <p style="margin-bottom:8px;">Recipient: <strong>${recipient}</strong></p>
+        ${
+          gmailConnectedEmail
+            ? `<p style="font-size:12px;color:#52525b;margin-bottom:8px;">Sending from: <strong>${gmailConnectedEmail}</strong></p>`
+            : ''
+        }
+        ${
+          isTest
+            ? '<p>This will send a verification email to confirm your Super Admin alert delivery is working.</p>'
+            : `<ul style="padding-left:18px;margin:6px 0 0;font-size:12px;">${previewItems}${
+                remainingCount > 0 ? `<li>...and ${remainingCount} more alert(s)</li>` : ''
+              }</ul>`
+        }
+      </div>`,
+      showCancelButton: true,
+      confirmButtonText: isTest ? 'Send Test Email' : 'Send Email Now',
+      cancelButtonText: 'Cancel',
     });
 
-    if (res.success) {
+    if (!confirmSend.isConfirmed) return;
+
+    setIsSendingAlertEmail(true);
+    try {
+      const result = await sendGmailAlertEmail({
+        accessToken: token,
+        to: recipient,
+        fromEmail: gmailConnectedEmail,
+        alerts: alertsToSend,
+        triggeredBy: currentUser?.name || 'Super Admin',
+        isTest,
+      });
+
       const nowIso = new Date().toISOString();
-      const records: EmailedAdminAlertRecord[] = matching.slice(0, 25).map((a) => ({
-        id: toSafeAlertDocId(a.id),
-        alertId: a.id,
-        recipientEmail: adminEmailConfig.recipientEmail || DEFAULT_ADMIN_ALERT_EMAIL,
-        sentAt: nowIso,
-        category: a.category,
-        title: a.title,
-      }));
-      await saveDocuments('emailedAlerts', records);
-      const statusUpdate: AdminEmailNotificationConfig = {
-        ...adminEmailConfig,
-        id: 'superadmin',
-        updatedAt: nowIso,
+      const summary = isTest
+        ? `Test email sent to ${recipient}`
+        : `Sent ${alertsToSend.length} alert(s) to ${recipient}`;
+      const updatedSettings: AdminEmailSettings = {
+        ...adminEmailSettings,
         lastSentAt: nowIso,
-        lastStatus: 'SENT',
-        lastError: '',
+        lastSentSummary: summary,
+        updatedAt: nowIso,
+        updatedBy: currentUser?.name || 'Super Admin',
       };
-      await saveDocument('adminNotificationSettings', statusUpdate);
-      setAdminEmailSettingsList([statusUpdate]);
+      await saveDocument('adminEmailSettings', updatedSettings);
+      setAdminEmailSettingsList((prev) => {
+        const exists = prev.some((s) => s.id === updatedSettings.id);
+        return exists
+          ? prev.map((s) => (s.id === updatedSettings.id ? updatedSettings : s))
+          : [updatedSettings, ...prev];
+      });
+
+      if (!isTest) {
+        alertsToSend.forEach((a) => emailedAlertIdsRef.current.add(a.id));
+      }
+
+      logActivity('SYSTEM_EVENT', `Emailed Super Admin notification (${result.subject}) to ${recipient}.`, 'System');
+      showActionSuccessToast(summary);
+    } catch (err: any) {
+      console.error('Failed sending Gmail alert email:', err);
+      if (err instanceof GmailAuthExpiredError) {
+        setGmailNeedsAuth(true);
+      }
+      showErrorAlert(
+        'Email Send Failed',
+        err?.message || 'Could not send Gmail notification. Please reconnect and try again.'
+      );
+    } finally {
+      setIsSendingAlertEmail(false);
     }
-    return res;
   };
 
-  // Real-time non-blocking toast (Admin only) + automatic Super Admin email notification (any session) for NEW alerts
+  // Real-time non-blocking toast + optional auto-email for NEW Admin alerts arriving after initial snapshot hydration
   const alertBaselineIdsRef = useRef<Set<string> | null>(null);
   const alertsArmedRef = useRef(false);
-  const inFlightEmailedAlertIdsRef = useRef<Set<string>>(new Set());
-
-  const emailedAlertIdSet = useMemo(() => {
-    const set = new Set<string>();
-    for (const rec of emailedAlerts) {
-      if (rec?.alertId) set.add(rec.alertId);
-    }
-    return set;
-  }, [emailedAlerts]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (!alertBaselineIdsRef.current) {
-        alertBaselineIdsRef.current = new Set(allAdminAlerts.map((a) => a.id));
-      }
+      alertBaselineIdsRef.current = new Set(allAdminAlerts.map((a) => a.id));
       alertsArmedRef.current = true;
     }, 2500);
     return () => clearTimeout(timer);
@@ -584,6 +656,10 @@ export default function App() {
       alertBaselineIdsRef.current = new Set(allAdminAlerts.map((a) => a.id));
       return;
     }
+    if (currentUser?.role !== 'ADMIN') {
+      alertBaselineIdsRef.current = new Set(allAdminAlerts.map((a) => a.id));
+      return;
+    }
 
     const prevIds = alertBaselineIdsRef.current || new Set<string>();
     const newlyArrived = allAdminAlerts.filter(
@@ -591,10 +667,7 @@ export default function App() {
     );
     alertBaselineIdsRef.current = new Set(allAdminAlerts.map((a) => a.id));
 
-    if (newlyArrived.length === 0) return;
-
-    // 1. In-app toast notification strictly when Super Admin is signed in
-    if (currentUser?.role === 'ADMIN') {
+    if (newlyArrived.length > 0) {
       const topAlert = newlyArrived[0];
       showAdminAlertToast(
         newlyArrived.length > 1
@@ -605,75 +678,64 @@ export default function App() {
           : topAlert.description,
         topAlert.severity
       );
-    }
 
-    // 2. Automatic Super Admin email notification (runs for any logged-in session when enabled)
-    if (!currentUser || !adminEmailConfig.enabled || !adminEmailConfig.recipientEmail) {
-      return;
-    }
-
-    const enabledCats = new Set(
-      adminEmailConfig.enabledCategories || ALL_ADMIN_ALERT_CATEGORIES
-    );
-    const alertsToEmail = newlyArrived.filter(
-      (a) =>
-        enabledCats.has(a.category) &&
-        !emailedAlertIdSet.has(a.id) &&
-        !inFlightEmailedAlertIdsRef.current.has(a.id)
-    );
-
-    if (alertsToEmail.length === 0) return;
-
-    alertsToEmail.forEach((a) => inFlightEmailedAlertIdsRef.current.add(a.id));
-
-    (async () => {
-      const res = await sendAdminAlertEmails({
-        alerts: alertsToEmail,
-        recipientEmail: adminEmailConfig.recipientEmail,
-        isTest: false,
-        triggeredBy: `${currentUser.name} (${currentUser.role})`,
-      });
-
-      if (res.success && !res.deduplicated) {
-        const nowIso = new Date().toISOString();
-        const records: EmailedAdminAlertRecord[] = alertsToEmail.map((a) => ({
-          id: toSafeAlertDocId(a.id),
-          alertId: a.id,
-          recipientEmail: adminEmailConfig.recipientEmail,
-          sentAt: nowIso,
-          category: a.category,
-          title: a.title,
-        }));
-        await saveDocuments('emailedAlerts', records);
-        const statusUpdate: AdminEmailNotificationConfig = {
-          ...adminEmailConfig,
-          id: 'superadmin',
-          updatedAt: nowIso,
-          lastSentAt: nowIso,
-          lastStatus: 'SENT',
-          lastError: '',
-        };
-        await saveDocument('adminNotificationSettings', statusUpdate);
-        setAdminEmailSettingsList([statusUpdate]);
-      } else if (res.code === 'EMAIL_NOT_CONFIGURED' || (!res.success && res.error)) {
-        alertsToEmail.forEach((a) => inFlightEmailedAlertIdsRef.current.delete(a.id));
-        const statusUpdate: AdminEmailNotificationConfig = {
-          ...adminEmailConfig,
-          id: 'superadmin',
-          updatedAt: new Date().toISOString(),
-          lastStatus: res.code === 'EMAIL_NOT_CONFIGURED' ? 'NOT_CONFIGURED' : 'ERROR',
-          lastError: res.message || res.error || 'Email send failed',
-        };
-        await saveDocument('adminNotificationSettings', statusUpdate);
-        setAdminEmailSettingsList([statusUpdate]);
+      // Opt-in automatic Gmail dispatch when Super Admin enabled autoSend and has an active session token
+      if (
+        adminEmailSettings.enabled &&
+        adminEmailSettings.autoSendOnNewAlert &&
+        isValidEmailAddress(adminEmailSettings.recipientEmail)
+      ) {
+        const eligibleForEmail = newlyArrived.filter(
+          (a) =>
+            adminEmailSettings.categories.includes(a.category) &&
+            !emailedAlertIdsRef.current.has(a.id)
+        );
+        const token = getGmailAccessToken();
+        if (eligibleForEmail.length > 0 && token && !gmailNeedsAuth) {
+          eligibleForEmail.forEach((a) => emailedAlertIdsRef.current.add(a.id));
+          sendGmailAlertEmail({
+            accessToken: token,
+            to: adminEmailSettings.recipientEmail,
+            fromEmail: gmailConnectedEmail,
+            alerts: eligibleForEmail,
+            triggeredBy: `${currentUser?.name || 'Super Admin'} (Auto-Notify)`,
+          })
+            .then(async () => {
+              const nowIso = new Date().toISOString();
+              const summary = `Auto-sent ${eligibleForEmail.length} new alert(s) to ${adminEmailSettings.recipientEmail}`;
+              const updatedSettings: AdminEmailSettings = {
+                ...adminEmailSettings,
+                lastSentAt: nowIso,
+                lastSentSummary: summary,
+                updatedAt: nowIso,
+              };
+              await saveDocument('adminEmailSettings', updatedSettings);
+              setAdminEmailSettingsList((prev) => {
+                const exists = prev.some((s) => s.id === updatedSettings.id);
+                return exists
+                  ? prev.map((s) => (s.id === updatedSettings.id ? updatedSettings : s))
+                  : [updatedSettings, ...prev];
+              });
+              showActionSuccessToast(summary);
+            })
+            .catch((err) => {
+              eligibleForEmail.forEach((a) => emailedAlertIdsRef.current.delete(a.id));
+              if (err instanceof GmailAuthExpiredError) {
+                setGmailNeedsAuth(true);
+              }
+              console.error('Auto-send Gmail alert failed:', err);
+            });
+        }
       }
-    })();
+    }
   }, [
     allAdminAlerts,
-    currentUser,
+    currentUser?.role,
+    currentUser?.name,
     dismissedAlertIds,
-    adminEmailConfig,
-    emailedAlertIdSet,
+    adminEmailSettings,
+    gmailNeedsAuth,
+    gmailConnectedEmail,
   ]);
 
   // Alert logged-in warehouse users once per session when near-expiry or expired stock items exist
@@ -740,6 +802,9 @@ export default function App() {
 
   // Logout handler
   const handleLogout = () => {
+    logoutGmailAuth();
+    setGmailNeedsAuth(true);
+    setGmailConnectedEmail(null);
     setCurrentUser(null);
   };
 
@@ -1018,10 +1083,8 @@ export default function App() {
     newReq: Omit<CtoRequest, 'id' | 'status' | 'submittedAt'>
   ) => {
     if (currentUser?.role === 'STAFF') return;
-    const normalizedDate = parseToYYYYMMDD(newReq.date) || newReq.date;
     const req: CtoRequest = {
       ...newReq,
-      date: normalizedDate,
       id: `cto-req-${Date.now()}`,
       status: 'PENDING',
       managerApproved: false,
@@ -1029,11 +1092,7 @@ export default function App() {
       submittedAt: new Date().toISOString(),
     };
     saveDocument('ctoRequests', req);
-    setCtoRequests((prev) => {
-      const next = [req, ...prev];
-      safeCacheCollectionItems('ctoRequests', next);
-      return next;
-    });
+    setCtoRequests((prev) => [req, ...prev]);
   };
 
   const handleApproveCtoRequest = async (id: string, notes?: string, approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => {
@@ -1079,10 +1138,9 @@ export default function App() {
     // If fully approved and it's a LEAVE request, mark Attendance Summary as LEAVE
     if (isFullyApproved && updatedCtoItem.requestType !== 'CREDIT') {
       const target: CtoRequest = updatedCtoItem;
-      const normalizedTargetDate = (parseToYYYYMMDD(target.date) || target.date).replace(/\//g, '-');
       let updatedSummaryItem: AttendanceSummaryDaily;
       const existingIdx = summaries.findIndex(
-        (s) => s.employeeId === target.employeeId && (parseToYYYYMMDD(s.date) || s.date) === normalizedTargetDate
+        (s) => s.employeeId === target.employeeId && s.date === target.date
       );
 
       if (existingIdx >= 0) {
@@ -1095,15 +1153,15 @@ export default function App() {
         };
       } else {
         updatedSummaryItem = {
-          id: `sum-cto-${target.employeeId}-${normalizedTargetDate}`,
+          id: `sum-cto-${target.employeeId}-${target.date}`,
           employeeId: target.employeeId,
           employeeName: target.employeeName,
           department: target.department,
           branch: target.branch || target.department,
-          date: normalizedTargetDate,
-          weekday: Number.isNaN(new Date(normalizedTargetDate).getTime())
+          date: target.date,
+          weekday: Number.isNaN(new Date(target.date).getTime())
             ? ''
-            : new Date(normalizedTargetDate).toLocaleDateString('en-US', { weekday: 'long' }),
+            : new Date(target.date).toLocaleDateString('en-US', { weekday: 'long' }),
           status: 'LEAVE',
           firstIn: null,
           lastOut: null,
@@ -1123,7 +1181,7 @@ export default function App() {
 
       setSummaries((prevSummaries) => {
         const idx = prevSummaries.findIndex(
-          (s) => s.employeeId === target.employeeId && (parseToYYYYMMDD(s.date) || s.date) === normalizedTargetDate
+          (s) => s.employeeId === target.employeeId && s.date === target.date
         );
         if (idx >= 0) {
           const next = [...prevSummaries];
@@ -1169,82 +1227,6 @@ export default function App() {
     );
   };
 
-  const handleUpdateCtoRequest = async (updatedCto: CtoRequest): Promise<boolean> => {
-    const normalizedDate = (parseToYYYYMMDD(updatedCto.date) || updatedCto.date).replace(/\//g, '-');
-    const sanitizedCto: CtoRequest = {
-      ...updatedCto,
-      date: normalizedDate,
-    };
-
-    const ok = await saveDocument('ctoRequests', sanitizedCto);
-    if (!ok) return false;
-
-    setCtoRequests((prev) => {
-      const next = prev.map((r) => (r.id === sanitizedCto.id ? sanitizedCto : r));
-      safeCacheCollectionItems('ctoRequests', next);
-      return next;
-    });
-
-    logActivity(
-      'CTO_ADJUSTMENT',
-      `Edited CTO ${sanitizedCto.requestType === 'CREDIT' ? 'Credit' : 'Leave'} request for ${sanitizedCto.employeeName} (${sanitizedCto.employeeId}) on ${sanitizedCto.date} (${sanitizedCto.hoursRequested}h, status: ${sanitizedCto.status}).`,
-      'CTO Requests'
-    );
-
-    if (sanitizedCto.status === 'APPROVED' && sanitizedCto.requestType !== 'CREDIT') {
-      const existingIdx = summaries.findIndex(
-        (s) => s.employeeId === sanitizedCto.employeeId && (parseToYYYYMMDD(s.date) || s.date) === normalizedDate
-      );
-      const updatedSummaryItem: AttendanceSummaryDaily =
-        existingIdx >= 0
-          ? {
-              ...summaries[existingIdx],
-              status: 'LEAVE' as AttendanceStatus,
-              isAdjusted: true,
-              adjustmentNote: `Approved CTO Leave (${sanitizedCto.hoursRequested}h) - Updated by ${currentUser?.name || 'Admin'}`,
-              anomalies: Array.from(new Set([...(summaries[existingIdx].anomalies || []), 'Approved CTO Leave'])),
-            }
-          : {
-              id: `sum-cto-${sanitizedCto.employeeId}-${normalizedDate}`,
-              employeeId: sanitizedCto.employeeId,
-              employeeName: sanitizedCto.employeeName,
-              department: sanitizedCto.department,
-              branch: sanitizedCto.branch || sanitizedCto.department,
-              date: normalizedDate,
-              weekday: Number.isNaN(new Date(normalizedDate).getTime())
-                ? ''
-                : new Date(normalizedDate).toLocaleDateString('en-US', { weekday: 'long' }),
-              status: 'LEAVE',
-              firstIn: null,
-              lastOut: null,
-              totalBreakMinutes: 0,
-              netHoursWorked: 0,
-              undertimeHours: 0,
-              overtimeHours: 0,
-              targetHours: 8.0,
-              anomalies: ['Approved CTO Leave'],
-              punches: [],
-              isAdjusted: true,
-              adjustmentNote: `Approved CTO Leave (${sanitizedCto.hoursRequested}h) - Updated by ${currentUser?.name || 'Admin'}`,
-            };
-
-      await saveDocument('summaries', updatedSummaryItem);
-      setSummaries((prevSummaries) => {
-        const idx = prevSummaries.findIndex(
-          (s) => s.employeeId === sanitizedCto.employeeId && (parseToYYYYMMDD(s.date) || s.date) === normalizedDate
-        );
-        if (idx >= 0) {
-          const next = [...prevSummaries];
-          next[idx] = updatedSummaryItem;
-          return next;
-        }
-        return [updatedSummaryItem, ...prevSummaries];
-      });
-    }
-
-    return true;
-  };
-
   const handleAddCtoManualAdjustment = (
     adj: Omit<CtoManualAdjustment, 'id' | 'timestamp'>
   ) => {
@@ -1263,29 +1245,16 @@ export default function App() {
   };
 
   // Add / Edit User handlers
-  const handleAddUser = async (newUser: User): Promise<boolean> => {
-    setUsers((prev) => {
-      const next = [...prev, newUser];
-      safeCacheCollectionItems('users', next);
-      return next;
-    });
-    const ok = await saveDocument('users', newUser);
+  const handleAddUser = (newUser: User) => {
+    saveDocument('users', newUser);
     logActivity('USER_MANAGEMENT', `Created staff account for ${newUser.name} (${newUser.employeeId}).`, 'Users');
-    return ok;
+    setUsers((prev) => [...prev, newUser]);
   };
 
-  const handleUpdateUser = async (updatedUser: User): Promise<boolean> => {
-    setUsers((prev) => {
-      const next = prev.map((u) => (u.id === updatedUser.id ? updatedUser : u));
-      safeCacheCollectionItems('users', next);
-      return next;
-    });
-    if (currentUser && currentUser.id === updatedUser.id) {
-      setCurrentUser(updatedUser);
-    }
-    const ok = await saveDocument('users', updatedUser);
+  const handleUpdateUser = (updatedUser: User) => {
+    saveDocument('users', updatedUser);
     logActivity('USER_MANAGEMENT', `Updated employee profile for ${updatedUser.name} (${updatedUser.employeeId}).`, 'Users');
-    return ok;
+    setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
   };
 
   const handleDeleteUser = (userId: string) => {
@@ -1296,11 +1265,7 @@ export default function App() {
   };
 
   const handleDeleteDispute = (disputeId: string) => {
-    setDisputes((prev) => {
-      const updated = prev.filter((d) => d.id !== disputeId);
-      safeCacheCollectionItems('disputes', updated);
-      return updated;
-    });
+    setDisputes((prev) => prev.filter((d) => d.id !== disputeId));
     removeDocument('disputes', disputeId);
   };
 
@@ -1327,28 +1292,14 @@ export default function App() {
       logActivity('DATA_CLEAR', `Cleared all biometric summary logs (${summaries.length} entries) and punch logs from system.`, 'Data Clear');
       setSummaries([]);
       setPunches([]);
-      try {
-        localStorage.removeItem('fbc_summaries');
-        localStorage.removeItem('fbc_punches');
-      } catch (e) {
-        console.error(e);
-      }
+      await clearCollectionCache('summaries');
+      await clearCollectionCache('punches');
     }
   };
 
-  const handleDeleteCtoRequest = async (ctoId: string) => {
-    const target = ctoRequests.find((c) => c.id === ctoId);
-    setCtoRequests((prev) => {
-      const next = prev.filter((c) => c.id !== ctoId);
-      safeCacheCollectionItems('ctoRequests', next);
-      return next;
-    });
-    await removeDocument('ctoRequests', ctoId);
-    logActivity(
-      'CTO_ADJUSTMENT',
-      `Deleted CTO request ${target ? `for ${target.employeeName} (${target.employeeId}) on ${target.date} (${target.hoursRequested}h)` : `ID ${ctoId}`}.`,
-      'CTO Requests'
-    );
+  const handleDeleteCtoRequest = (ctoId: string) => {
+    removeDocument('ctoRequests', ctoId);
+    setCtoRequests((prev) => prev.filter((c) => c.id !== ctoId));
   };
 
   // Warehouse Category & Stock Item CRUD Handlers
@@ -1924,7 +1875,7 @@ export default function App() {
         itemCode: issuingItemCode,
         description: line.description,
         category: line.category,
-        batchNo: (line.batchNo || '').trim(),
+        batchNo: line.batchNo || 'GENERAL',
         uom: line.uom,
         unitPrice: Number(line.unitPrice) || 0,
         quantity: qty,
@@ -1957,7 +1908,8 @@ export default function App() {
   const handleApproveReviewStockTransfer = async (
     transferId: string,
     cancelledItemIds: string[] = [],
-    cancelReasons: Record<string, string> = {}
+    cancelReasons: Record<string, string> = {},
+    reviewedItems?: StockTransferLineItem[]
   ) => {
     if (currentUser?.role !== 'ADMIN') return;
     const target = stockTransfers.find((t) => t.id === transferId);
@@ -1974,24 +1926,29 @@ export default function App() {
     const updatedMovementsMap = new Map<string, StockMovementEntry>();
     const isFromMonitored = isMonitoredWarehouseBranch(target.fromBranchCode);
 
-    const updatedItems: StockTransferLineItem[] = (target.items || []).map((line, lineIndex) => {
-      const lineKey = line.id || `line-idx-${lineIndex}`;
-      const isCancelled = cancelledSet.has(lineKey);
-      const wasAlreadyCancelled = line.itemStatus === 'CANCELLED';
-      const reasonText = isCancelled
-        ? (cancelReasons[lineKey] || '').trim() || 'Not available in inventory'
-        : undefined;
+    const origLineByKey = new Map<string, StockTransferLineItem>();
+    (target.items || []).forEach((origLine, idx) => {
+      const key = origLine.id || `line-idx-${idx}`;
+      origLineByKey.set(key, origLine);
+    });
 
-      const origOutMov =
+    const sourceLines =
+      Array.isArray(reviewedItems) && reviewedItems.length > 0
+        ? reviewedItems
+        : target.items || [];
+
+    const findMatchingOutMovement = (line: StockTransferLineItem) => {
+      const descLower = (line.description || '').toLowerCase();
+      const batchLower = (line.batchNo || 'GENERAL').toLowerCase();
+      return (
         stockMovements.find(
           (m) =>
             m.movementType === 'TRANSFER_OUT' &&
             m.refNumber === target.strRefNumber &&
             m.transferNumber === target.transferNumber &&
             m.branchCode === target.fromBranchCode &&
-            (m.description || '').toLowerCase() === (line.description || '').toLowerCase() &&
-            ((m.batchNo || '').toLowerCase() === (line.batchNo || '').trim().toLowerCase() ||
-              (!(line.batchNo || '').trim() && (m.batchNo || '').toLowerCase() === 'general'))
+            (m.description || '').toLowerCase() === descLower &&
+            (m.batchNo || 'GENERAL').toLowerCase() === batchLower
         ) ||
         stockMovements.find(
           (m) =>
@@ -1999,8 +1956,41 @@ export default function App() {
             m.refNumber === target.strRefNumber &&
             m.transferNumber === target.transferNumber &&
             m.branchCode === target.fromBranchCode &&
-            (m.description || '').toLowerCase() === (line.description || '').toLowerCase()
-        );
+            (m.description || '').toLowerCase() === descLower
+        )
+      );
+    };
+
+    const findIssuingItemIndex = (line: StockTransferLineItem) =>
+      workingInventory.findIndex(
+        (i) =>
+          (line.itemId && i.id === line.itemId && i.branchCode === target.fromBranchCode) ||
+          (i.branchCode === target.fromBranchCode &&
+            (i.description || '').toLowerCase() === (line.description || '').toLowerCase() &&
+            (i.batchNo || '').toLowerCase() === (line.batchNo || '').toLowerCase())
+      );
+
+    const updatedItems: StockTransferLineItem[] = sourceLines.map((line, lineIndex) => {
+      const lineKey = line.id || `line-idx-${lineIndex}`;
+      const origLine = origLineByKey.get(lineKey);
+      const isNewAddedLine = !origLine;
+      const isCancelled = cancelledSet.has(lineKey);
+      const wasAlreadyCancelled = origLine?.itemStatus === 'CANCELLED';
+      const editedQty = Math.max(1, Number(line.quantity) || 1);
+      const reasonText = isCancelled
+        ? (cancelReasons[lineKey] || '').trim() || 'Not available in inventory'
+        : undefined;
+
+      const origOutMov = !isNewAddedLine
+        ? findMatchingOutMovement(origLine || line)
+        : undefined;
+
+      const prevReservedQty =
+        isNewAddedLine || wasAlreadyCancelled
+          ? 0
+          : origOutMov
+          ? Math.max(0, (Number(origOutMov.previousQty) || 0) - (Number(origOutMov.newQty) || 0))
+          : Number(origLine?.quantity) || 0;
 
       if (origOutMov && isCancelled) {
         updatedMovementsMap.set(origOutMov.id, {
@@ -2009,24 +1999,13 @@ export default function App() {
         });
       }
 
-      if (isCancelled && !wasAlreadyCancelled && isFromMonitored) {
-        const deductedQty = origOutMov
-          ? Math.max(0, (Number(origOutMov.previousQty) || 0) - (Number(origOutMov.newQty) || 0))
-          : 0;
-
-        if (deductedQty > 0) {
-          const issuingIdx = workingInventory.findIndex(
-            (i) =>
-              (line.itemId && i.id === line.itemId && i.branchCode === target.fromBranchCode) ||
-              (i.branchCode === target.fromBranchCode &&
-                (i.description || '').toLowerCase() === (line.description || '').toLowerCase() &&
-                (i.batchNo || '').toLowerCase() === (line.batchNo || '').toLowerCase())
-          );
-
+      if (isCancelled && !wasAlreadyCancelled && !isNewAddedLine && isFromMonitored) {
+        if (prevReservedQty > 0) {
+          const issuingIdx = findIssuingItemIndex(line);
           if (issuingIdx >= 0) {
             const existingIssuing = workingInventory[issuingIdx];
             const prevQty = Number(existingIssuing.quantity) || 0;
-            const newQty = prevQty + deductedQty;
+            const newQty = prevQty + prevReservedQty;
             const restoredItem: WarehouseInventoryItem = {
               ...existingIssuing,
               quantity: newQty,
@@ -2052,10 +2031,10 @@ export default function App() {
               itemCode: restoredItem.itemCode || line.itemCode,
               description: line.description,
               category: line.category,
-              batchNo: (line.batchNo || '').trim(),
+              batchNo: line.batchNo || 'GENERAL',
               uom: line.uom,
               unitPrice: line.unitPrice,
-              quantity: deductedQty,
+              quantity: prevReservedQty,
               previousQty: prevQty,
               newQty,
               refNumber: target.strRefNumber,
@@ -2067,10 +2046,155 @@ export default function App() {
         }
       }
 
+      if (!isCancelled) {
+        const qtyDelta = editedQty - prevReservedQty;
+
+        if (isFromMonitored && qtyDelta !== 0) {
+          const issuingIdx = findIssuingItemIndex(line);
+          if (issuingIdx >= 0) {
+            const existingIssuing = workingInventory[issuingIdx];
+            const prevStockQty = Number(existingIssuing.quantity) || 0;
+            const nextStockQty = Math.max(0, prevStockQty - qtyDelta);
+            const updatedIssuing: WarehouseInventoryItem = {
+              ...existingIssuing,
+              quantity: nextStockQty,
+              updatedAt: nowIso,
+              updatedBy: reviewer,
+            };
+            workingInventory[issuingIdx] = updatedIssuing;
+            itemsToSaveMap.set(updatedIssuing.id, updatedIssuing);
+
+            if (isNewAddedLine || wasAlreadyCancelled) {
+              newMovements.push({
+                id: `mov-tout-${Date.now()}-${lineIndex}-${Math.random().toString(36).slice(2, 5)}`,
+                date: todayDate,
+                timestamp: nowIso,
+                movementType: 'TRANSFER_OUT',
+                status: 'PENDING',
+                branchCode: target.fromBranchCode,
+                branchName: target.fromBranchName,
+                counterpartyBranchCode: target.toBranchCode,
+                counterpartyBranchName: target.toBranchName,
+                fromBranchCode: target.fromBranchCode,
+                fromBranchName: target.fromBranchName,
+                toBranchCode: target.toBranchCode,
+                toBranchName: target.toBranchName,
+                itemId: updatedIssuing.id,
+                itemCode: updatedIssuing.itemCode || line.itemCode,
+                description: line.description,
+                category: line.category,
+                batchNo: line.batchNo || 'GENERAL',
+                uom: line.uom,
+                unitPrice: Number(line.unitPrice) || 0,
+                quantity: editedQty,
+                previousQty: prevStockQty,
+                newQty: nextStockQty,
+                refNumber: target.strRefNumber,
+                transferNumber: target.transferNumber,
+                performedBy: reviewer,
+                notes: isNewAddedLine
+                  ? `Added during Super Admin STR review to ${target.toBranchName}`
+                  : `Re-approved during Super Admin STR review`,
+              });
+            } else if (qtyDelta > 0) {
+              newMovements.push({
+                id: `mov-adjout-${Date.now()}-${lineIndex}-${Math.random().toString(36).slice(2, 5)}`,
+                date: todayDate,
+                timestamp: nowIso,
+                movementType: 'TRANSFER_OUT',
+                status: 'PENDING',
+                branchCode: target.fromBranchCode,
+                branchName: target.fromBranchName,
+                counterpartyBranchCode: target.toBranchCode,
+                counterpartyBranchName: target.toBranchName,
+                fromBranchCode: target.fromBranchCode,
+                fromBranchName: target.fromBranchName,
+                toBranchCode: target.toBranchCode,
+                toBranchName: target.toBranchName,
+                itemId: updatedIssuing.id,
+                itemCode: updatedIssuing.itemCode || line.itemCode,
+                description: line.description,
+                category: line.category,
+                batchNo: line.batchNo || 'GENERAL',
+                uom: line.uom,
+                unitPrice: Number(line.unitPrice) || 0,
+                quantity: qtyDelta,
+                previousQty: prevStockQty,
+                newQty: nextStockQty,
+                refNumber: target.strRefNumber,
+                transferNumber: target.transferNumber,
+                performedBy: reviewer,
+                notes: `Super Admin STR review qty increased (${prevReservedQty} → ${editedQty})`,
+              });
+            } else {
+              const returnedQty = Math.abs(qtyDelta);
+              newMovements.push({
+                id: `mov-adjret-${Date.now()}-${lineIndex}-${Math.random().toString(36).slice(2, 5)}`,
+                date: todayDate,
+                timestamp: nowIso,
+                movementType: 'STOCK_IN',
+                status: 'COMPLETED',
+                branchCode: target.fromBranchCode,
+                branchName: target.fromBranchName,
+                fromBranchCode: target.toBranchCode,
+                fromBranchName: `${target.toBranchName} (STR Qty Reduced)`,
+                toBranchCode: target.fromBranchCode,
+                toBranchName: target.fromBranchName,
+                itemId: updatedIssuing.id,
+                itemCode: updatedIssuing.itemCode || line.itemCode,
+                description: line.description,
+                category: line.category,
+                batchNo: line.batchNo || 'GENERAL',
+                uom: line.uom,
+                unitPrice: Number(line.unitPrice) || 0,
+                quantity: returnedQty,
+                previousQty: prevStockQty,
+                newQty: nextStockQty,
+                refNumber: target.strRefNumber,
+                transferNumber: target.transferNumber,
+                performedBy: reviewer,
+                notes: `Super Admin STR review qty reduced (${prevReservedQty} → ${editedQty})`,
+              });
+            }
+          }
+        } else if (!isFromMonitored && isNewAddedLine) {
+          newMovements.push({
+            id: `mov-tout-${Date.now()}-${lineIndex}-${Math.random().toString(36).slice(2, 5)}`,
+            date: todayDate,
+            timestamp: nowIso,
+            movementType: 'TRANSFER_OUT',
+            status: 'PENDING',
+            branchCode: target.fromBranchCode,
+            branchName: target.fromBranchName,
+            counterpartyBranchCode: target.toBranchCode,
+            counterpartyBranchName: target.toBranchName,
+            fromBranchCode: target.fromBranchCode,
+            fromBranchName: target.fromBranchName,
+            toBranchCode: target.toBranchCode,
+            toBranchName: target.toBranchName,
+            itemId: line.itemId || `store-${target.fromBranchCode.toLowerCase()}-${Date.now()}`,
+            itemCode: line.itemCode,
+            description: line.description,
+            category: line.category,
+            batchNo: line.batchNo || 'GENERAL',
+            uom: line.uom,
+            unitPrice: Number(line.unitPrice) || 0,
+            quantity: editedQty,
+            previousQty: 0,
+            newQty: 0,
+            refNumber: target.strRefNumber,
+            transferNumber: target.transferNumber,
+            performedBy: reviewer,
+            notes: `Added during Super Admin STR review to ${target.toBranchName}`,
+          });
+        }
+      }
+
       if (isCancelled) {
         return {
           ...line,
           id: lineKey,
+          quantity: editedQty,
           itemStatus: 'CANCELLED',
           cancelReason: reasonText,
         };
@@ -2079,6 +2203,7 @@ export default function App() {
       return {
         ...restLine,
         id: lineKey,
+        quantity: editedQty,
         itemStatus: 'APPROVED',
       };
     });
@@ -2214,7 +2339,7 @@ export default function App() {
             itemCode: resolvedLineCode,
             description: line.description,
             category: line.category,
-            batchNo: (line.batchNo || '').trim(),
+            batchNo: line.batchNo || 'GENERAL',
             uom: line.uom,
             unitPrice: line.unitPrice || 0,
             branchCode: target.toBranchCode,
@@ -2247,7 +2372,7 @@ export default function App() {
         itemCode: resolvedLineCode,
         description: line.description,
         category: line.category,
-        batchNo: (line.batchNo || '').trim(),
+        batchNo: line.batchNo || 'GENERAL',
         uom: line.uom,
         unitPrice: line.unitPrice,
         quantity: qty,
@@ -2290,102 +2415,6 @@ export default function App() {
     logActivity(
       'SYSTEM_EVENT',
       `Marked STR ${target.strRefNumber} (${target.fromBranchName} → ${target.toBranchName}) as RECEIVED by ${receiverName}.`,
-      'Warehouse'
-    );
-  };
-
-  const handleDeleteStockTransfer = async (transferId: string) => {
-    if (currentUser?.role !== 'ADMIN') return;
-    const target = stockTransfers.find((t) => t.id === transferId);
-    if (!target) return;
-
-    const nowIso = new Date().toISOString();
-    const performer = currentUser?.name || 'Super Admin';
-    const linkedMovements = stockMovements.filter(
-      (m) =>
-        m.refNumber === target.strRefNumber &&
-        m.transferNumber === target.transferNumber
-    );
-
-    const workingInventory = [...warehouseItems];
-    const itemsToSaveMap = new Map<string, WarehouseInventoryItem>();
-    const isFromMonitored = isMonitoredWarehouseBranch(target.fromBranchCode);
-    const isToMonitored = isMonitoredWarehouseBranch(target.toBranchCode);
-
-    // Reverse linked stock adjustments so deleting an STR keeps branch balances accurate
-    linkedMovements.forEach((mov) => {
-      if (mov.movementType === 'TRANSFER_OUT' && mov.status !== 'CANCELLED' && isFromMonitored) {
-        const deductedQty = Math.max(
-          0,
-          (Number(mov.previousQty) || 0) - (Number(mov.newQty) || 0)
-        );
-        if (deductedQty > 0) {
-          const idx = workingInventory.findIndex(
-            (i) =>
-              (mov.itemId && i.id === mov.itemId && i.branchCode === target.fromBranchCode) ||
-              (i.branchCode === target.fromBranchCode &&
-                (i.description || '').toLowerCase() === (mov.description || '').toLowerCase() &&
-                ((i.batchNo || '').toLowerCase() === (mov.batchNo || '').toLowerCase() ||
-                  (!(i.batchNo || '').trim() && (mov.batchNo || '').toLowerCase() === 'general')))
-          );
-          if (idx >= 0) {
-            const cur = workingInventory[idx];
-            const restored: WarehouseInventoryItem = {
-              ...cur,
-              quantity: (Number(cur.quantity) || 0) + deductedQty,
-              updatedAt: nowIso,
-              updatedBy: performer,
-            };
-            workingInventory[idx] = restored;
-            itemsToSaveMap.set(restored.id, restored);
-          }
-        }
-      } else if (mov.movementType === 'TRANSFER_IN' && mov.status === 'RECEIVED' && isToMonitored) {
-        const addedQty = Math.max(
-          0,
-          (Number(mov.newQty) || 0) - (Number(mov.previousQty) || 0)
-        );
-        if (addedQty > 0) {
-          const idx = workingInventory.findIndex(
-            (i) =>
-              (mov.itemId && i.id === mov.itemId && i.branchCode === target.toBranchCode) ||
-              (i.branchCode === target.toBranchCode &&
-                (i.description || '').toLowerCase() === (mov.description || '').toLowerCase() &&
-                ((i.batchNo || '').toLowerCase() === (mov.batchNo || '').toLowerCase() ||
-                  (!(i.batchNo || '').trim() && (mov.batchNo || '').toLowerCase() === 'general')))
-          );
-          if (idx >= 0) {
-            const cur = workingInventory[idx];
-            const reverted: WarehouseInventoryItem = {
-              ...cur,
-              quantity: Math.max(0, (Number(cur.quantity) || 0) - addedQty),
-              updatedAt: nowIso,
-              updatedBy: performer,
-            };
-            workingInventory[idx] = reverted;
-            itemsToSaveMap.set(reverted.id, reverted);
-          }
-        }
-      }
-    });
-
-    if (itemsToSaveMap.size > 0) {
-      await saveDocuments('warehouseItems', Array.from(itemsToSaveMap.values()));
-      setWarehouseItems(workingInventory);
-    }
-
-    if (linkedMovements.length > 0) {
-      const linkedIds = new Set(linkedMovements.map((m) => m.id));
-      await Promise.all(linkedMovements.map((m) => removeDocument('stockMovements', m.id)));
-      setStockMovements((prev) => prev.filter((m) => !linkedIds.has(m.id)));
-    }
-
-    await removeDocument('stockTransfers', transferId);
-    setStockTransfers((prev) => prev.filter((t) => t.id !== transferId));
-
-    logActivity(
-      'SYSTEM_EVENT',
-      `Deleted STR ${target.strRefNumber} (${target.fromBranchName} → ${target.toBranchName}, status: ${target.status}).`,
       'Warehouse'
     );
   };
@@ -2435,200 +2464,6 @@ export default function App() {
         'Warehouse'
       );
     }
-  };
-
-  // Store Concern Ticketing CRUD Handlers
-  const handleCreateStoreTicket = async (payload: {
-    branch: string;
-    category: StoreTicketCategory;
-    priority: StoreTicketPriority;
-    subject: string;
-    description: string;
-    attachments?: StoreTicketAttachment[];
-  }): Promise<boolean> => {
-    if (!currentUser) return false;
-    const nowIso = new Date().toISOString();
-    const dateSlug = nowIso.slice(0, 10).replace(/-/g, '');
-    const todayPrefix = `TCK-${dateSlug}-`;
-    const todaySeqs = storeTickets
-      .filter((t) => (t.ticketNumber || '').startsWith(todayPrefix))
-      .map((t) => Number(t.ticketNumber.slice(todayPrefix.length)))
-      .filter((n) => Number.isFinite(n) && n > 0);
-    const nextSeq = (todaySeqs.length > 0 ? Math.max(...todaySeqs) : 0) + 1;
-    const ticketNumber = `${todayPrefix}${String(nextSeq).padStart(3, '0')}`;
-
-    const sanitizedAttachments = (payload.attachments || [])
-      .filter((att) => att && isSafeImageSrc(att.dataUrl))
-      .slice(0, 3);
-
-    const newTicket: StoreTicket = {
-      id: `tck-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      ticketNumber,
-      branch: payload.branch,
-      category: payload.category,
-      priority: payload.priority,
-      subject: payload.subject,
-      description: payload.description,
-      attachments: sanitizedAttachments.length > 0 ? sanitizedAttachments : undefined,
-      status: 'PENDING',
-      requestedByUserId: currentUser.id,
-      requestedByEmployeeId: currentUser.employeeId,
-      requestedByName: currentUser.name,
-      requestedByRole: currentUser.role,
-      createdAt: nowIso,
-      updatedAt: nowIso,
-      updatedBy: currentUser.name,
-      statusHistory: [
-        {
-          status: 'PENDING',
-          changedBy: currentUser.name,
-          changedByRole: currentUser.role,
-          changedAt: nowIso,
-          note:
-            sanitizedAttachments.length > 0
-              ? `Submitted ticket for ${payload.branch} with ${sanitizedAttachments.length} photo(s)`
-              : `Submitted ticket for ${payload.branch}`,
-        },
-      ],
-    };
-
-    const ok = await saveDocument('storeTickets', newTicket);
-    if (!ok) return false;
-
-    setStoreTickets((prev) => {
-      const next = [newTicket, ...prev];
-      safeCacheCollectionItems('storeTickets', next);
-      return next;
-    });
-
-    logActivity(
-      'TICKET_MANAGEMENT',
-      `Submitted store ticket ${newTicket.ticketNumber} for ${newTicket.branch} [${newTicket.category} · ${newTicket.priority}]: "${newTicket.subject}"${sanitizedAttachments.length > 0 ? ` (${sanitizedAttachments.length} image(s) attached)` : ''}.`,
-      'Store Tickets'
-    );
-    return true;
-  };
-
-  const handleUpdateStoreTicketStatus = async (
-    ticketId: string,
-    newStatus: StoreTicketStatus,
-    adminNotes: string
-  ): Promise<boolean> => {
-    if (!currentUser) return false;
-    const target = storeTickets.find((t) => t.id === ticketId);
-    if (!target) return false;
-
-    const isOwnerCancellingPending =
-      currentUser.role !== 'ADMIN' &&
-      newStatus === 'CANCELLED' &&
-      target.status === 'PENDING' &&
-      target.requestedByEmployeeId === currentUser.employeeId;
-
-    if (currentUser.role !== 'ADMIN' && !isOwnerCancellingPending) {
-      return false;
-    }
-
-    const nowIso = new Date().toISOString();
-    const historyEntry = {
-      status: newStatus,
-      changedBy: currentUser.name,
-      changedByRole: currentUser.role,
-      changedAt: nowIso,
-      note: adminNotes || undefined,
-    };
-
-    const updatedTicket: StoreTicket = {
-      ...target,
-      status: newStatus,
-      adminNotes,
-      updatedBy: currentUser.name,
-      updatedAt: nowIso,
-      resolvedAt:
-        newStatus === 'DONE'
-          ? target.resolvedAt || nowIso
-          : target.status === 'DONE'
-          ? ''
-          : target.resolvedAt,
-      statusHistory: [...(target.statusHistory || []), historyEntry],
-    };
-
-    const ok = await saveDocument('storeTickets', updatedTicket);
-    if (!ok) return false;
-
-    setStoreTickets((prev) => {
-      const next = prev.map((t) => (t.id === ticketId ? updatedTicket : t));
-      safeCacheCollectionItems('storeTickets', next);
-      return next;
-    });
-
-    logActivity(
-      'TICKET_MANAGEMENT',
-      `Updated store ticket ${updatedTicket.ticketNumber} (${updatedTicket.branch}) status to ${newStatus}${adminNotes ? ` — Notes: "${adminNotes}"` : ''}.`,
-      'Store Tickets'
-    );
-    return true;
-  };
-
-  const handleUpdateStoreTicketAttachments = async (
-    ticketId: string,
-    attachments: StoreTicketAttachment[]
-  ): Promise<boolean> => {
-    if (!currentUser) return false;
-    const target = storeTickets.find((t) => t.id === ticketId);
-    if (!target) return false;
-
-    const isOwner = target.requestedByEmployeeId === currentUser.employeeId;
-    const isAdminUser = currentUser.role === 'ADMIN';
-    if (!isAdminUser && (!isOwner || target.status === 'DONE' || target.status === 'CANCELLED')) {
-      return false;
-    }
-
-    const sanitizedAttachments = (attachments || [])
-      .filter((att) => att && isSafeImageSrc(att.dataUrl))
-      .slice(0, 3);
-
-    const nowIso = new Date().toISOString();
-    const updatedTicket: StoreTicket = {
-      ...target,
-      attachments: sanitizedAttachments,
-      updatedBy: currentUser.name,
-      updatedAt: nowIso,
-    };
-
-    const ok = await saveDocument('storeTickets', updatedTicket);
-    if (!ok) return false;
-
-    setStoreTickets((prev) => {
-      const next = prev.map((t) => (t.id === ticketId ? updatedTicket : t));
-      safeCacheCollectionItems('storeTickets', next);
-      return next;
-    });
-
-    logActivity(
-      'TICKET_MANAGEMENT',
-      `Updated photo attachments on store ticket ${updatedTicket.ticketNumber} (${sanitizedAttachments.length} image(s)).`,
-      'Store Tickets'
-    );
-    return true;
-  };
-
-  const handleDeleteStoreTicket = async (ticketId: string): Promise<boolean> => {
-    if (currentUser?.role !== 'ADMIN') return false;
-    const target = storeTickets.find((t) => t.id === ticketId);
-    await removeDocument('storeTickets', ticketId);
-    setStoreTickets((prev) => {
-      const next = prev.filter((t) => t.id !== ticketId);
-      safeCacheCollectionItems('storeTickets', next);
-      return next;
-    });
-    if (target) {
-      logActivity(
-        'TICKET_MANAGEMENT',
-        `Deleted store ticket ${target.ticketNumber} (${target.branch} — "${target.subject}").`,
-        'Store Tickets'
-      );
-    }
-    return true;
   };
 
   // Handle Google Sheets Sync Trigger
@@ -2730,6 +2565,13 @@ export default function App() {
         onDismissAlert={handleDismissAlert}
         onMarkAllAlertsRead={handleMarkAllAlertsRead}
         onRestoreDismissedAlerts={handleRestoreDismissedAlerts}
+        emailSettings={adminEmailSettings}
+        gmailNeedsAuth={gmailNeedsAuth}
+        gmailConnectedEmail={gmailConnectedEmail}
+        isGmailSigningIn={isGmailSigningIn}
+        isSendingAlertEmail={isSendingAlertEmail}
+        onConnectGmail={handleConnectGmail}
+        onSendAlertEmails={handleSendAdminEmailAlerts}
       />
 
       {/* Main Workspace Layout with Professional Sidebar */}
@@ -2747,7 +2589,6 @@ export default function App() {
                 ? pendingWarehouseAlertsCount
                 : monitoredNearExpiryEntries.length
             }
-            pendingTicketsCount={storeTickets.filter((t) => t.status === 'PENDING').length}
             onLogout={handleLogout}
             onSyncGoogleSheets={handleSyncGoogleSheets}
             isSyncing={isSyncing}
@@ -2810,24 +2651,9 @@ export default function App() {
                 onCreateStockTransfer={handleCreateStockTransfer}
                 onReviewStockTransfer={handleApproveReviewStockTransfer}
                 onMarkStockTransferReceived={handleMarkStockTransferReceived}
-                onDeleteStockTransfer={handleDeleteStockTransfer}
                 onAddLedgerEntry={handleAddLedgerEntry}
                 onUpdateLedgerEntry={handleUpdateLedgerEntry}
                 onDeleteLedgerEntry={handleDeleteLedgerEntry}
-              />
-            ) : activeTab === 'store-tickets' &&
-              (currentUser.role === 'ADMIN' ||
-                currentUser.role === 'BRANCH_MANAGER' ||
-                currentUser.role === 'PAYROLL' ||
-                currentUser.role === 'SHIFT_MANAGER' ||
-                currentUser.role === 'STAFF') ? (
-              <StoreTicketingDashboard
-                currentUser={currentUser}
-                tickets={storeTickets}
-                onCreateTicket={handleCreateStoreTicket}
-                onUpdateTicketStatus={handleUpdateStoreTicketStatus}
-                onUpdateTicketAttachments={handleUpdateStoreTicketAttachments}
-                onDeleteTicket={handleDeleteStoreTicket}
               />
             ) : (
               <>
@@ -2848,8 +2674,6 @@ export default function App() {
                     onSubmitDispute={handleSubmitDispute}
                     onApproveCtoRequest={handleApproveCtoRequest}
                     onRejectCtoRequest={handleRejectCtoRequest}
-                    onUpdateCtoRequest={handleUpdateCtoRequest}
-                    onSubmitCtoRequest={handleSubmitCtoRequest}
                     onAddUser={handleAddUser}
                     onUpdateUser={handleUpdateUser}
                     onDeleteUser={handleDeleteUser}
@@ -2869,11 +2693,15 @@ export default function App() {
                     onDismissAlert={handleDismissAlert}
                     onMarkAllAlertsRead={handleMarkAllAlertsRead}
                     onRestoreDismissedAlerts={handleRestoreDismissedAlerts}
-                    adminEmailConfig={adminEmailConfig}
-                    emailDeliveryStatus={emailDeliveryStatus}
-                    onSaveAdminEmailConfig={handleSaveAdminEmailConfig}
-                    onSendTestAdminEmail={handleSendTestAdminEmail}
-                    onEmailActiveAlertsNow={handleEmailActiveAlertsNow}
+                    emailSettings={adminEmailSettings}
+                    gmailNeedsAuth={gmailNeedsAuth}
+                    gmailConnectedEmail={gmailConnectedEmail}
+                    isGmailSigningIn={isGmailSigningIn}
+                    isSendingAlertEmail={isSendingAlertEmail}
+                    onConnectGmail={handleConnectGmail}
+                    onDisconnectGmail={handleDisconnectGmail}
+                    onUpdateEmailSettings={handleUpdateAdminEmailSettings}
+                    onSendAlertEmails={handleSendAdminEmailAlerts}
                   />
                 )}
 

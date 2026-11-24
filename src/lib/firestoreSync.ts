@@ -1,4 +1,15 @@
-import { db, collection, onSnapshot, doc, getDoc, setDoc, deleteDoc, writeBatch } from './firebase';
+import {
+  auth,
+  db,
+  collection,
+  onSnapshot,
+  doc,
+  getDoc,
+  getDocFromServer,
+  setDoc,
+  deleteDoc,
+  writeBatch,
+} from './firebase';
 
 const getStorageKey = (colName: string) => {
   if (colName === 'ctoRequests') return 'fbc_cto_requests';
@@ -8,103 +19,280 @@ const getStorageKey = (colName: string) => {
 
 const getDeletedKey = (colName: string) => `fbc_deleted_${colName}`;
 
-// Keep browser localStorage well below the ~5MB origin quota so critical session keys never fail.
-const MAX_COLLECTION_CACHE_CHARS = 350_000;
-const EVICTABLE_CACHE_KEYS = [
+const HEAVY_COLLECTION_STORAGE_KEYS = [
+  'fbc_users',
   'fbc_summaries',
   'fbc_punches',
-  'fbc_stockMovements',
+  'fbc_disputes',
+  'fbc_schedules',
+  'fbc_cto_requests',
+  'fbc_cto_adjustments',
   'fbc_activityLogs',
   'fbc_activity_logs',
+  'fbc_warehouseCategories',
   'fbc_warehouseItems',
-  'fbc_storeTickets',
+  'fbc_stockMovements',
   'fbc_stockTransfers',
-  'fbc_emailedAlerts',
+  'fbc_adminEmailSettings',
 ];
 
-function evictBulkyCaches(preserveKey?: string) {
-  for (const key of EVICTABLE_CACHE_KEYS) {
-    if (key === preserveKey) continue;
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      // Ignore storage access errors
+const IDB_NAME = 'fbc_firestore_cache';
+const IDB_VERSION = 1;
+const IDB_STORE = 'collections';
+const MAX_DELETED_IDS_CACHE = 500;
+
+export enum FirestoreOperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: FirestoreOperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+function isPermissionDeniedError(error: unknown): boolean {
+  const code = (error as { code?: string })?.code;
+  const msg = error instanceof Error ? error.message : String(error || '');
+  return (
+    code === 'permission-denied' ||
+    msg.includes('Missing or insufficient permissions')
+  );
+}
+
+function logFirestorePermissionError(
+  error: unknown,
+  operationType: FirestoreOperationType,
+  path: string | null
+) {
+  const currentAuthUser = auth?.currentUser;
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: currentAuthUser?.uid ?? null,
+      email: currentAuthUser?.email ?? null,
+      emailVerified: currentAuthUser?.emailVerified ?? null,
+      isAnonymous: currentAuthUser?.isAnonymous ?? null,
+      tenantId: currentAuthUser?.tenantId ?? null,
+      providerInfo:
+        currentAuthUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+}
+
+let connectionTested = false;
+export async function testFirestoreConnection(): Promise<void> {
+  if (connectionTested || typeof window === 'undefined') return;
+  connectionTested = true;
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
     }
   }
 }
 
-export function safeLocalStorageSet(
-  key: string,
-  value: string,
-  options?: { essential?: boolean }
-): boolean {
+export function safeLocalStorageGet(key: string): string | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function safeLocalStorageRemove(key: string): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.removeItem(key);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function evictHeavyLocalStorageCaches(): void {
+  if (typeof localStorage === 'undefined') return;
+  for (const key of HEAVY_COLLECTION_STORAGE_KEYS) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // ignore storage errors
+    }
+  }
+}
+
+export function safeLocalStorageSet(key: string, value: string): boolean {
+  if (typeof localStorage === 'undefined') return false;
   try {
     localStorage.setItem(key, value);
     return true;
   } catch {
-    // Quota exceeded or storage unavailable: free bulky caches and retry if essential or small enough
-    evictBulkyCaches(key);
-    if (options?.essential || value.length <= MAX_COLLECTION_CACHE_CHARS) {
-      try {
-        localStorage.setItem(key, value);
-        return true;
-      } catch {
-        return false;
-      }
+    // Evict heavy legacy collection caches to reclaim ~5MB localStorage quota
+    evictHeavyLocalStorageCaches();
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch {
+      return false;
     }
-    return false;
   }
 }
 
-function sanitizeItemsForCache<T>(collectionName: string, items: T[]): unknown[] {
-  if (collectionName !== 'storeTickets') return items;
-  // Strip base64 photo blobs from localStorage cache; live images come directly from Firestore.
-  return (items as Array<Record<string, any>>).map((ticket) => {
-    if (!Array.isArray(ticket?.attachments) || ticket.attachments.length === 0) {
-      return ticket;
+let idbPromise: Promise<IDBDatabase | null> | null = null;
+
+function getCacheDb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === 'undefined') {
+    return Promise.resolve(null);
+  }
+  if (idbPromise) return idbPromise;
+
+  idbPromise = new Promise((resolve) => {
+    try {
+      const request = indexedDB.open(IDB_NAME, IDB_VERSION);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(IDB_STORE)) {
+          database.createObjectStore(IDB_STORE);
+        }
+      };
+      request.onsuccess = () => {
+        const database = request.result;
+        database.onversionchange = () => {
+          database.close();
+          idbPromise = null;
+        };
+        resolve(database);
+      };
+      request.onerror = () => {
+        resolve(null);
+      };
+      request.onblocked = () => {
+        resolve(null);
+      };
+    } catch {
+      resolve(null);
     }
-    return {
-      ...ticket,
-      attachments: ticket.attachments.map((att: Record<string, any>) => ({
-        ...att,
-        dataUrl: '',
-      })),
-    };
+  });
+
+  return idbPromise;
+}
+
+async function idbGetCollection<T>(storageKey: string): Promise<T[] | null> {
+  const database = await getCacheDb();
+  if (!database) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = database.transaction(IDB_STORE, 'readonly');
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.get(storageKey);
+      req.onsuccess = () => {
+        resolve(Array.isArray(req.result) ? (req.result as T[]) : null);
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
   });
 }
 
-export function safeCacheCollectionItems<T>(collectionName: string, items: T[]): void {
-  const storageKey = getStorageKey(collectionName);
-  try {
-    const payload = sanitizeItemsForCache(collectionName, items);
-    const serialized = JSON.stringify(payload);
-    if (serialized.length > MAX_COLLECTION_CACHE_CHARS) {
-      // Too large for localStorage quota; clear any stale oversized cache entry silently.
-      try {
-        localStorage.removeItem(storageKey);
-      } catch {
-        // Ignore
-      }
-      return;
+async function idbSetCollection<T>(storageKey: string, items: T[]): Promise<void> {
+  const database = await getCacheDb();
+  if (!database) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = database.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      store.put(items, storageKey);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
     }
-    safeLocalStorageSet(storageKey, serialized);
-  } catch {
-    // Never treat optional localStorage caching failure as a fatal error
+  });
+}
+
+async function idbDeleteCollection(storageKey: string): Promise<void> {
+  const database = await getCacheDb();
+  if (!database) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = database.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      store.delete(storageKey);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export async function readCollectionCache<T>(storageKey: string): Promise<T[] | null> {
+  const idbItems = await idbGetCollection<T>(storageKey);
+  if (idbItems) return idbItems;
+
+  const legacyRaw = safeLocalStorageGet(storageKey);
+  if (legacyRaw) {
+    try {
+      const parsed = JSON.parse(legacyRaw);
+      if (Array.isArray(parsed)) {
+        await idbSetCollection(storageKey, parsed as T[]);
+        safeLocalStorageRemove(storageKey);
+        return parsed as T[];
+      }
+    } catch {
+      safeLocalStorageRemove(storageKey);
+    }
+  }
+  return null;
+}
+
+export async function writeCollectionCache<T>(
+  storageKey: string,
+  items: T[]
+): Promise<void> {
+  // Store large collection snapshots in IndexedDB rather than ~5MB localStorage
+  await idbSetCollection(storageKey, items);
+  // Evict any legacy localStorage copy so origin localStorage quota stays free
+  safeLocalStorageRemove(storageKey);
+  if (storageKey === 'fbc_activityLogs') {
+    safeLocalStorageRemove('fbc_activity_logs');
   }
 }
 
-// Prune any legacy oversized collection caches on startup to free browser quota
-try {
-  if (typeof window !== 'undefined' && window.localStorage) {
-    for (const key of EVICTABLE_CACHE_KEYS) {
-      const existingVal = window.localStorage.getItem(key);
-      if (existingVal && existingVal.length > MAX_COLLECTION_CACHE_CHARS) {
-        window.localStorage.removeItem(key);
-      }
-    }
+export async function clearCollectionCache(collectionName: string): Promise<void> {
+  const storageKey = getStorageKey(collectionName);
+  await idbDeleteCollection(storageKey);
+  safeLocalStorageRemove(storageKey);
+  safeLocalStorageRemove(getDeletedKey(collectionName));
+  if (collectionName === 'activityLogs') {
+    safeLocalStorageRemove('fbc_activity_logs');
   }
-} catch {
-  // Ignore storage access errors
 }
 
 let cloudInitializedCache: boolean | null = null;
@@ -118,7 +306,11 @@ async function isCloudInitialized(): Promise<boolean> {
       return true;
     }
   } catch (e) {
-    console.error('Error checking cloud initialized status:', e);
+    if (isPermissionDeniedError(e)) {
+      logFirestorePermissionError(e, FirestoreOperationType.GET, '_metadata/initialized');
+    } else {
+      console.error('Error checking cloud initialized status:', e);
+    }
   }
   return false;
 }
@@ -132,7 +324,11 @@ async function markCloudInitialized() {
       { merge: true }
     );
   } catch (e) {
-    console.error('Error marking cloud initialized:', e);
+    if (isPermissionDeniedError(e)) {
+      logFirestorePermissionError(e, FirestoreOperationType.WRITE, '_metadata/initialized');
+    } else {
+      console.error('Error marking cloud initialized:', e);
+    }
   }
 }
 
@@ -165,7 +361,7 @@ export function sortItemsByCollection<T extends { id: string }>(
       const timeB = new Date(b.timestamp || b.date || 0).getTime();
       return timeB - timeA;
     }
-    if (colName === 'stockTransfers' || colName === 'storeTickets') {
+    if (colName === 'stockTransfers') {
       const timeA = new Date(a.createdAt || a.date || 0).getTime();
       const timeB = new Date(b.createdAt || b.date || 0).getTime();
       return timeB - timeA;
@@ -189,42 +385,58 @@ export function sortItemsByCollection<T extends { id: string }>(
 
 export async function isWarehouseCatalogSeeded(): Promise<boolean> {
   try {
-    if (localStorage.getItem('fbc_warehouse_catalog_seeded_v1') === 'true') {
+    if (safeLocalStorageGet('fbc_warehouse_catalog_seeded_v1') === 'true') {
       return true;
     }
     const metaSnap = await getDoc(doc(db, '_metadata', 'warehouseCatalogSeededV1'));
     if (metaSnap.exists()) {
-      safeLocalStorageSet('fbc_warehouse_catalog_seeded_v1', 'true', { essential: true });
+      safeLocalStorageSet('fbc_warehouse_catalog_seeded_v1', 'true');
       return true;
     }
   } catch (e) {
-    console.error('Error checking warehouse catalog seeded status:', e);
+    if (isPermissionDeniedError(e)) {
+      logFirestorePermissionError(
+        e,
+        FirestoreOperationType.GET,
+        '_metadata/warehouseCatalogSeededV1'
+      );
+    } else {
+      console.error('Error checking warehouse catalog seeded status:', e);
+    }
   }
   return false;
 }
 
 export async function markWarehouseCatalogSeeded(): Promise<void> {
+  safeLocalStorageSet('fbc_warehouse_catalog_seeded_v1', 'true');
   try {
-    safeLocalStorageSet('fbc_warehouse_catalog_seeded_v1', 'true', { essential: true });
     await setDoc(
       doc(db, '_metadata', 'warehouseCatalogSeededV1'),
       { seeded: true, timestamp: new Date().toISOString() },
       { merge: true }
     );
   } catch (e) {
-    console.error('Error marking warehouse catalog seeded:', e);
+    if (isPermissionDeniedError(e)) {
+      logFirestorePermissionError(
+        e,
+        FirestoreOperationType.WRITE,
+        '_metadata/warehouseCatalogSeededV1'
+      );
+    } else {
+      console.error('Error marking warehouse catalog seeded:', e);
+    }
   }
 }
 
 export function getDeletedIds(colName: string): Set<string> {
   try {
-    const raw = localStorage.getItem(getDeletedKey(colName));
+    const raw = safeLocalStorageGet(getDeletedKey(colName));
     if (raw) {
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) return new Set(arr);
     }
   } catch {
-    // Ignore storage read error
+    // ignore corrupt deleted IDs cache
   }
   return new Set();
 }
@@ -232,18 +444,18 @@ export function getDeletedIds(colName: string): Set<string> {
 export function recordDeletedId(colName: string, id: string) {
   const deletedSet = getDeletedIds(colName);
   deletedSet.add(id);
-  safeLocalStorageSet(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)), {
-    essential: true,
-  });
+  const bounded = Array.from(deletedSet).slice(-MAX_DELETED_IDS_CACHE);
+  safeLocalStorageSet(getDeletedKey(colName), JSON.stringify(bounded));
 }
 
 export function unmarkDeletedId(colName: string, id: string) {
   const deletedSet = getDeletedIds(colName);
   if (deletedSet.has(id)) {
     deletedSet.delete(id);
-    safeLocalStorageSet(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)), {
-      essential: true,
-    });
+    safeLocalStorageSet(
+      getDeletedKey(colName),
+      JSON.stringify(Array.from(deletedSet))
+    );
   }
 }
 
@@ -257,9 +469,10 @@ export function unmarkDeletedIds(colName: string, ids: string[]) {
     }
   }
   if (changed) {
-    safeLocalStorageSet(getDeletedKey(colName), JSON.stringify(Array.from(deletedSet)), {
-      essential: true,
-    });
+    safeLocalStorageSet(
+      getDeletedKey(colName),
+      JSON.stringify(Array.from(deletedSet))
+    );
   }
 }
 
@@ -268,113 +481,110 @@ export function subscribeCollection<T extends { id: string }>(
   initialData: T[],
   onUpdate: (data: T[]) => void
 ) {
+  void testFirestoreConnection();
+
   const colRef = collection(db, collectionName);
   const storageKey = getStorageKey(collectionName);
   const seededKey = `fbc_seeded_${collectionName}`;
 
-  return onSnapshot(
+  let hasReceivedSnapshot = false;
+  let isUnsubscribed = false;
+
+  // Hydrate immediately from IndexedDB cache before live snapshot resolves (if available)
+  void readCollectionCache<T>(storageKey).then((cachedItems) => {
+    if (isUnsubscribed || hasReceivedSnapshot || !cachedItems) return;
+    const deletedSet = getDeletedIds(collectionName);
+    const filtered = cachedItems.filter((item) => !deletedSet.has(item.id));
+    onUpdate(sortItemsByCollection(collectionName, filtered));
+  });
+
+  const unsubscribeSnapshot = onSnapshot(
     colRef,
     async (snapshot) => {
+      hasReceivedSnapshot = true;
+      if (isUnsubscribed) return;
+
       const deletedSet = getDeletedIds(collectionName);
 
       if (snapshot.empty) {
-        let isSeededLocally: string | null = null;
-        try {
-          isSeededLocally = localStorage.getItem(seededKey);
-        } catch (e) {
-          console.error(`Failed reading ${seededKey}`, e);
-        }
+        const isSeededLocally = safeLocalStorageGet(seededKey);
         const isSeededInCloud = await isCloudInitialized();
 
         if (isSeededLocally || isSeededInCloud) {
           // Collection was already initialized; empty means intentionally empty!
-          safeLocalStorageSet(storageKey, JSON.stringify([]));
+          await writeCollectionCache(storageKey, []);
           onUpdate([]);
           return;
         }
 
         // If not seeded yet anywhere, check if we have cached local data
-        let cached: string | null = null;
-        try {
-          cached = localStorage.getItem(storageKey);
-        } catch {
-          // Ignore
-        }
-        if (cached) {
-          try {
-            const parsed = JSON.parse(cached);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              const filtered = parsed.filter((item) => !deletedSet.has(item.id));
-              const sorted = sortItemsByCollection(collectionName, filtered);
-              safeLocalStorageSet(seededKey, 'true', { essential: true });
-              await markCloudInitialized();
-              onUpdate(sorted);
-              // Seed cached items to firestore so cloud is populated
-              await saveDocuments(collectionName, sorted);
-              return;
-            }
-          } catch (e) {
-            console.error(`Failed parsing cache for ${storageKey}`, e);
-          }
+        const cachedItems = await readCollectionCache<T>(storageKey);
+        if (cachedItems && cachedItems.length > 0) {
+          const filtered = cachedItems.filter((item) => !deletedSet.has(item.id));
+          const sorted = sortItemsByCollection(collectionName, filtered);
+          safeLocalStorageSet(seededKey, 'true');
+          await markCloudInitialized();
+          await writeCollectionCache(storageKey, sorted);
+          onUpdate(sorted);
+          // Seed cached items to firestore so cloud is populated
+          await saveDocuments(collectionName, sorted);
+          return;
         }
 
         // If no cache and initial default data exists, seed once
         const validInitial = initialData.filter((item) => !deletedSet.has(item.id));
         const sortedInitial = sortItemsByCollection(collectionName, validInitial);
 
+        safeLocalStorageSet(seededKey, 'true');
+        await markCloudInitialized();
+
         if (sortedInitial.length > 0) {
-          safeLocalStorageSet(seededKey, 'true', { essential: true });
-          await markCloudInitialized();
           await saveDocuments(collectionName, sortedInitial);
-          safeCacheCollectionItems(collectionName, sortedInitial);
+          await writeCollectionCache(storageKey, sortedInitial);
           onUpdate(sortedInitial);
         } else {
-          safeLocalStorageSet(seededKey, 'true', { essential: true });
-          safeLocalStorageSet(storageKey, JSON.stringify([]));
-          await markCloudInitialized();
+          await writeCollectionCache(storageKey, []);
           onUpdate([]);
         }
       } else {
-        safeLocalStorageSet(seededKey, 'true', { essential: true });
+        safeLocalStorageSet(seededKey, 'true');
         await markCloudInitialized();
 
         const items: T[] = snapshot.docs
-          .map((docSnap) => ({ ...(docSnap.data() as Record<string, any>), id: docSnap.id } as T))
+          .map((docSnap) => docSnap.data() as T)
           .filter((item) => !deletedSet.has(item.id));
 
         const sortedItems = sortItemsByCollection(collectionName, items);
 
-        safeCacheCollectionItems(collectionName, sortedItems);
+        // Cache snapshot safely in IndexedDB & clear any bloated localStorage key
+        void writeCollectionCache(storageKey, sortedItems);
         onUpdate(sortedItems);
       }
     },
     (error) => {
-      console.error(`Firestore error on ${collectionName}:`, error);
+      if (isPermissionDeniedError(error)) {
+        logFirestorePermissionError(error, FirestoreOperationType.LIST, collectionName);
+      } else {
+        console.error(`Firestore error on ${collectionName}:`, error);
+      }
       const deletedSet = getDeletedIds(collectionName);
-      let cached: string | null = null;
-      try {
-        cached = localStorage.getItem(storageKey);
-      } catch (storageErr) {
-        console.error(`Failed reading fallback cache for ${storageKey}`, storageErr);
-      }
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed)) {
-            const filtered = parsed.filter((item) => !deletedSet.has(item.id));
-            const sorted = sortItemsByCollection(collectionName, filtered);
-            onUpdate(sorted);
-            return;
-          }
-        } catch (e) {
-          console.error(`Failed loading fallback cache for ${storageKey}`, e);
+      void readCollectionCache<T>(storageKey).then((cachedItems) => {
+        if (isUnsubscribed) return;
+        if (cachedItems) {
+          const filtered = cachedItems.filter((item) => !deletedSet.has(item.id));
+          onUpdate(sortItemsByCollection(collectionName, filtered));
+          return;
         }
-      }
-      const validInitial = initialData.filter((item) => !deletedSet.has(item.id));
-      const sortedInitial = sortItemsByCollection(collectionName, validInitial);
-      onUpdate(sortedInitial);
+        const validInitial = initialData.filter((item) => !deletedSet.has(item.id));
+        onUpdate(sortItemsByCollection(collectionName, validInitial));
+      });
     }
   );
+
+  return () => {
+    isUnsubscribed = true;
+    unsubscribeSnapshot();
+  };
 }
 
 export function cleanUndefined<T>(obj: T): T {
@@ -399,19 +609,22 @@ export function cleanUndefined<T>(obj: T): T {
 export async function saveDocument<T extends { id: string }>(
   collectionName: string,
   item: T
-): Promise<boolean> {
-  if (!item?.id) {
-    console.error(`Cannot save to ${collectionName}: missing document id`, item);
-    return false;
-  }
+) {
+  if (!item?.id) return;
   unmarkDeletedId(collectionName, item.id);
   try {
     const cleanedItem = cleanUndefined(item);
     await setDoc(doc(db, collectionName, item.id), cleanedItem, { merge: true });
-    return true;
   } catch (error) {
-    console.error(`Error saving to ${collectionName}:`, error);
-    return false;
+    if (isPermissionDeniedError(error)) {
+      logFirestorePermissionError(
+        error,
+        FirestoreOperationType.WRITE,
+        `${collectionName}/${item.id}`
+      );
+    } else {
+      console.error(`Error saving to ${collectionName}:`, error);
+    }
   }
 }
 
@@ -437,7 +650,11 @@ export async function saveDocuments<T extends { id: string }>(
       }
       await batch.commit();
     } catch (e) {
-      console.error(`Error in batch saving to ${collectionName}:`, e);
+      if (isPermissionDeniedError(e)) {
+        logFirestorePermissionError(e, FirestoreOperationType.WRITE, collectionName);
+      } else {
+        console.error(`Error in batch saving to ${collectionName}:`, e);
+      }
       // Fallback to individual setDoc calls if batch fails
       for (const item of chunk) {
         await saveDocument(collectionName, item);
@@ -451,22 +668,26 @@ export async function removeDocument(collectionName: string, id: string) {
   recordDeletedId(collectionName, id);
   const storageKey = getStorageKey(collectionName);
   try {
-    const cached = localStorage.getItem(storageKey);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (Array.isArray(parsed)) {
-        const filtered = parsed.filter((item: any) => item.id !== id);
-        safeCacheCollectionItems(collectionName, filtered);
-      }
+    const cachedItems = await readCollectionCache<{ id: string }>(storageKey);
+    if (cachedItems) {
+      const filtered = cachedItems.filter((item) => item.id !== id);
+      await writeCollectionCache(storageKey, filtered);
     }
   } catch {
-    // Ignore cache cleanup error
+    // ignore local cache update errors
   }
 
   try {
     await deleteDoc(doc(db, collectionName, id));
   } catch (error) {
-    console.error(`Error deleting from ${collectionName}:`, error);
+    if (isPermissionDeniedError(error)) {
+      logFirestorePermissionError(
+        error,
+        FirestoreOperationType.DELETE,
+        `${collectionName}/${id}`
+      );
+    } else {
+      console.error(`Error deleting from ${collectionName}:`, error);
+    }
   }
 }
-

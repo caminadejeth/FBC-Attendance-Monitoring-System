@@ -1,11 +1,8 @@
 import {
-  AdminAlertCategoryKey,
-  AdminEmailNotificationConfig,
   AttendanceSummaryDaily,
   CtoRequest,
   DisputeRequest,
   StockTransferRequisition,
-  StoreTicket,
   WarehouseInventoryItem,
 } from '../types';
 import {
@@ -13,7 +10,7 @@ import {
   isMonitoredWarehouseBranch,
   NEAR_EXPIRY_THRESHOLD_DAYS,
 } from '../data/warehouseData';
-import { safeLocalStorageSet } from '../lib/firestoreSync';
+import { safeLocalStorageGet, safeLocalStorageSet } from '../lib/firestoreSync';
 
 export type AdminAlertCategory =
   | 'STR'
@@ -21,8 +18,7 @@ export type AdminAlertCategory =
   | 'NEAR_EXPIRY'
   | 'DISPUTE'
   | 'CTO'
-  | 'ATTENDANCE'
-  | 'TICKET';
+  | 'ATTENDANCE';
 export type AdminAlertSeverity = 'critical' | 'warning' | 'info';
 
 export interface AdminAlertItem {
@@ -43,7 +39,6 @@ export interface BuildAdminAlertsInput {
   disputes: DisputeRequest[];
   ctoRequests: CtoRequest[];
   summaries: AttendanceSummaryDaily[];
-  storeTickets?: StoreTicket[];
 }
 
 const SEVERITY_RANK: Record<AdminAlertSeverity, number> = {
@@ -64,7 +59,6 @@ export function buildAdminAlerts({
   disputes,
   ctoRequests,
   summaries,
-  storeTickets = [],
 }: BuildAdminAlertsInput): AdminAlertItem[] {
   const alerts: AdminAlertItem[] = [];
 
@@ -234,8 +228,8 @@ export function buildAdminAlerts({
         cto.managerApproved ? 'Manager Approved' : 'Pending Review'
       }`,
       timestamp: cto.submittedAt || cto.date || new Date().toISOString(),
-      targetTab: 'cto-management',
-      actionLabel: 'Manage CTO',
+      targetTab: 'schedules',
+      actionLabel: 'View Roster',
     });
   }
 
@@ -265,25 +259,6 @@ export function buildAdminAlerts({
     });
   }
 
-  // 6. Pending Store Concern Tickets
-  const pendingTickets = (storeTickets || []).filter(
-    (t) => t && t.status === 'PENDING'
-  );
-  for (const t of pendingTickets) {
-    const isUrgentOrHigh = t.priority === 'URGENT' || t.priority === 'HIGH';
-    alerts.push({
-      id: `ticket-${t.id}`,
-      category: 'TICKET',
-      severity: isUrgentOrHigh ? 'critical' : 'warning',
-      title: `Store Ticket ${t.ticketNumber} · ${t.branch}`,
-      description: `${t.category} (${t.priority}): ${t.subject}`,
-      meta: `Submitted by ${t.requestedByName} · Pending Admin review`,
-      timestamp: t.createdAt || new Date().toISOString(),
-      targetTab: 'store-tickets',
-      actionLabel: 'Manage Ticket',
-    });
-  }
-
   return alerts.sort((a, b) => {
     const sevDiff = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
     if (sevDiff !== 0) return sevDiff;
@@ -306,138 +281,37 @@ export function formatAlertTimestamp(ts?: string): string {
 export function loadAdminReadAlertIds(userId?: string): Set<string> {
   if (!userId) return new Set();
   try {
-    const raw = localStorage.getItem(`fbc_admin_read_alerts_${userId}`);
+    const raw = safeLocalStorageGet(`fbc_admin_read_alerts_${userId}`);
     if (raw) {
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) return new Set(arr.filter((x) => typeof x === 'string'));
     }
-  } catch (err) {
-    console.error('Failed loading read admin alert IDs:', err);
+  } catch {
+    // ignore corrupt preference cache
   }
   return new Set();
 }
 
 export function saveAdminReadAlertIds(userId: string, ids: Set<string>): void {
   const bounded = Array.from(ids).slice(-400);
-  safeLocalStorageSet(`fbc_admin_read_alerts_${userId}`, JSON.stringify(bounded), {
-    essential: true,
-  });
+  safeLocalStorageSet(`fbc_admin_read_alerts_${userId}`, JSON.stringify(bounded));
 }
 
 export function loadAdminDismissedAlertIds(userId?: string): Set<string> {
   if (!userId) return new Set();
   try {
-    const raw = localStorage.getItem(`fbc_admin_dismissed_alerts_${userId}`);
+    const raw = safeLocalStorageGet(`fbc_admin_dismissed_alerts_${userId}`);
     if (raw) {
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) return new Set(arr.filter((x) => typeof x === 'string'));
     }
-  } catch (err) {
-    console.error('Failed loading dismissed admin alert IDs:', err);
+  } catch {
+    // ignore corrupt preference cache
   }
   return new Set();
 }
 
 export function saveAdminDismissedAlertIds(userId: string, ids: Set<string>): void {
   const bounded = Array.from(ids).slice(-400);
-  safeLocalStorageSet(`fbc_admin_dismissed_alerts_${userId}`, JSON.stringify(bounded), {
-    essential: true,
-  });
+  safeLocalStorageSet(`fbc_admin_dismissed_alerts_${userId}`, JSON.stringify(bounded));
 }
-
-export const DEFAULT_ADMIN_ALERT_EMAIL = 'caminadejeth@gmail.com';
-
-export const ALL_ADMIN_ALERT_CATEGORIES: AdminAlertCategoryKey[] = [
-  'STR',
-  'LOW_STOCK',
-  'NEAR_EXPIRY',
-  'DISPUTE',
-  'CTO',
-  'ATTENDANCE',
-  'TICKET',
-];
-
-export const DEFAULT_ADMIN_EMAIL_CONFIG: AdminEmailNotificationConfig = {
-  id: 'superadmin',
-  enabled: true,
-  recipientEmail: DEFAULT_ADMIN_ALERT_EMAIL,
-  enabledCategories: [...ALL_ADMIN_ALERT_CATEGORIES],
-  updatedAt: '',
-};
-
-export function toSafeAlertDocId(alertId: string): string {
-  return alertId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 140) || `alert_${Date.now()}`;
-}
-
-export interface EmailDeliveryStatusResponse {
-  configured: boolean;
-  provider: 'smtp' | 'resend' | 'none';
-  defaultRecipient: string;
-  senderConfigured?: boolean;
-}
-
-export async function fetchEmailDeliveryStatus(): Promise<EmailDeliveryStatusResponse> {
-  try {
-    const res = await fetch('/api/notifications/email-status');
-    if (!res.ok) {
-      return {
-        configured: false,
-        provider: 'none',
-        defaultRecipient: DEFAULT_ADMIN_ALERT_EMAIL,
-      };
-    }
-    return await res.json();
-  } catch {
-    return {
-      configured: false,
-      provider: 'none',
-      defaultRecipient: DEFAULT_ADMIN_ALERT_EMAIL,
-    };
-  }
-}
-
-export interface SendAdminAlertEmailsResult {
-  success: boolean;
-  configured?: boolean;
-  deduplicated?: boolean;
-  sentCount?: number;
-  recipient?: string;
-  code?: string;
-  message?: string;
-  error?: string;
-}
-
-export async function sendAdminAlertEmails(params: {
-  alerts: AdminAlertItem[];
-  recipientEmail: string;
-  isTest?: boolean;
-  triggeredBy?: string;
-}): Promise<SendAdminAlertEmailsResult> {
-  try {
-    const res = await fetch('/api/notifications/send-alert-email', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        alerts: params.alerts.map((a) => ({
-          id: a.id,
-          category: a.category,
-          severity: a.severity,
-          title: a.title,
-          description: a.description,
-          meta: a.meta,
-          timestamp: a.timestamp,
-        })),
-        recipientEmail: params.recipientEmail || DEFAULT_ADMIN_ALERT_EMAIL,
-        isTest: Boolean(params.isTest),
-        triggeredBy: params.triggeredBy || 'FBC Attendance Portal',
-      }),
-    });
-    return await res.json();
-  } catch (err: any) {
-    return {
-      success: false,
-      error: err?.message || 'Network error while sending alert email.',
-    };
-  }
-}
-

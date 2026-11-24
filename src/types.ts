@@ -200,7 +200,6 @@ export type ActivityActionType =
   | 'SCHEDULE_UPDATE'
   | 'USER_MANAGEMENT'
   | 'BIOMETRIC_UPLOAD'
-  | 'TICKET_MANAGEMENT'
   | 'AUTH'
   | 'SYSTEM_EVENT';
 
@@ -373,90 +372,22 @@ export interface StockTransferRequisition {
   createdByUserId?: string;
 }
 
-// Store Concern Ticketing System Types
-export type StoreTicketStatus =
-  | 'PENDING'
-  | 'IN_PROGRESS'
-  | 'ON_HOLD'
-  | 'DONE'
-  | 'CANCELLED';
-
-export type StoreTicketCategory =
-  | 'Equipment'
-  | 'IT'
-  | 'Supplies'
-  | 'Facility'
-  | 'Other';
-
-export type StoreTicketPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-
-export interface StoreTicketStatusHistoryEntry {
-  status: StoreTicketStatus;
-  changedBy: string;
-  changedByRole?: string;
-  changedAt: string;
-  note?: string;
-}
-
-export interface StoreTicketAttachment {
-  id: string;
-  name: string;
-  dataUrl: string;
-  sizeBytes?: number;
-  uploadedAt: string;
-}
-
-export interface StoreTicket {
-  id: string;
-  ticketNumber: string; // e.g. TCK-20261120-001
-  branch: string;       // Requesting branch e.g. YC Ebloc
-  category: StoreTicketCategory;
-  priority: StoreTicketPriority;
-  subject: string;
-  description: string;
-  attachments?: StoreTicketAttachment[];
-  status: StoreTicketStatus;
-  requestedByUserId: string;
-  requestedByEmployeeId: string;
-  requestedByName: string;
-  requestedByRole: UserRole | string;
-  adminNotes?: string;
-  updatedBy?: string;
-  updatedAt?: string;
-  resolvedAt?: string;
-  createdAt: string;
-  statusHistory?: StoreTicketStatusHistoryEntry[];
-}
-
-export type AdminAlertCategoryKey =
+export type AdminEmailAlertCategory =
   | 'STR'
   | 'LOW_STOCK'
   | 'NEAR_EXPIRY'
   | 'DISPUTE'
   | 'CTO'
-  | 'ATTENDANCE'
-  | 'TICKET';
+  | 'ATTENDANCE';
 
-export interface AdminEmailNotificationConfig {
+export interface AdminEmailSettings {
   id: string;
-  enabled: boolean;
   recipientEmail: string;
-  enabledCategories: AdminAlertCategoryKey[];
+  enabled: boolean;
+  autoSendOnNewAlert: boolean;
+  categories: AdminEmailAlertCategory[];
+  lastSentAt?: string;
+  lastSentSummary?: string;
   updatedAt: string;
   updatedBy?: string;
-  lastSentAt?: string;
-  lastStatus?: 'SENT' | 'NOT_CONFIGURED' | 'ERROR';
-  lastError?: string;
 }
-
-export interface EmailedAdminAlertRecord {
-  id: string;
-  alertId: string;
-  recipientEmail: string;
-  sentAt: string;
-  category: string;
-  title: string;
-}
-
-
-

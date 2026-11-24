@@ -106,10 +106,10 @@ interface WarehouseInventoryDashboardProps {
   onReviewStockTransfer: (
     transferId: string,
     cancelledItemIds?: string[],
-    cancelReasons?: Record<string, string>
+    cancelReasons?: Record<string, string>,
+    reviewedItems?: StockTransferLineItem[]
   ) => Promise<void> | void;
   onMarkStockTransferReceived: (transferId: string) => Promise<void> | void;
-  onDeleteStockTransfer?: (transferId: string) => Promise<void> | void;
   onAddLedgerEntry: (
     entry: Omit<StockMovementEntry, 'id' | 'timestamp'>
   ) => Promise<void> | void;
@@ -154,7 +154,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   onCreateStockTransfer,
   onReviewStockTransfer,
   onMarkStockTransferReceived,
-  onDeleteStockTransfer,
   onAddLedgerEntry,
   onUpdateLedgerEntry,
   onDeleteLedgerEntry,
@@ -280,8 +279,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
   // History, Print, Inline Min & STR/Ledger Modal State
   const [strSearch, setStrSearch] = useState<string>('');
-  const [strStartDate, setStrStartDate] = useState<string>('');
-  const [strEndDate, setStrEndDate] = useState<string>('');
   const [printableTransfer, setPrintableTransfer] =
     useState<StockTransferRequisition | null>(null);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
@@ -295,9 +292,14 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   // Super Admin STR Item-by-Item Review & Cancellation Modal State
   const [reviewingTransfer, setReviewingTransfer] =
     useState<StockTransferRequisition | null>(null);
+  const [reviewDraftItems, setReviewDraftItems] = useState<StockTransferLineItem[]>([]);
+  const [reviewAddedLineIds, setReviewAddedLineIds] = useState<Set<string>>(new Set());
   const [reviewCancelledIds, setReviewCancelledIds] = useState<Set<string>>(new Set());
   const [reviewCancelReasons, setReviewCancelReasons] = useState<Record<string, string>>({});
   const [isSavingReview, setIsSavingReview] = useState<boolean>(false);
+  const [isReviewAddPickerOpen, setIsReviewAddPickerOpen] = useState<boolean>(false);
+  const [reviewPickerSearch, setReviewPickerSearch] = useState<string>('');
+  const [reviewPickerCategory, setReviewPickerCategory] = useState<string>('ALL');
 
   // Inline Min Level Editing (Super Admin)
   const [editingMinItemId, setEditingMinItemId] = useState<string | null>(null);
@@ -662,9 +664,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   const filteredTransfers = useMemo(() => {
     const q = strSearch.toLowerCase().trim();
     return stockTransfers.filter((trf) => {
-      const trfDate = (trf.date || '').slice(0, 10);
-      if (strStartDate && (!trfDate || trfDate < strStartDate)) return false;
-      if (strEndDate && (!trfDate || trfDate > strEndDate)) return false;
       if (!q) return true;
       const items = Array.isArray(trf.items) ? trf.items : [];
       return (
@@ -677,7 +676,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         items.some((i) => (i.description || '').toLowerCase().includes(q))
       );
     });
-  }, [stockTransfers, strSearch, strStartDate, strEndDate]);
+  }, [stockTransfers, strSearch]);
 
   // Google Sheet Flattened Rows
   const googleSheetRows = useMemo(() => {
@@ -758,139 +757,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'STR Export');
     const filename = `FBC_STR_GoogleSheet_${new Date().toISOString().slice(0, 10)}.xlsx`;
-    XLSX.writeFile(workbook, filename);
-    showExportToast(filename);
-  };
-
-  const handleExportStrHistoryExcel = (transfersSubset?: StockTransferRequisition[]) => {
-    const source = transfersSubset || filteredTransfers;
-    if (source.length === 0) {
-      showErrorAlert(
-        'No STR History to Export',
-        'Create at least one Stock Transfer Requisition (STR) before exporting.'
-      );
-      return;
-    }
-
-    const summaryRows = source.map((trf) => {
-      const safeLines = Array.isArray(trf.items) ? trf.items : [];
-      const activeItems = safeLines.filter((i) => i.itemStatus !== 'CANCELLED');
-      const cancelledCount = safeLines.length - activeItems.length;
-      const totalActiveQty = activeItems.reduce(
-        (sum, line) => sum + (Number(line.quantity) || 0),
-        0
-      );
-      const totalActiveAmount = activeItems.reduce(
-        (sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.unitPrice) || 0),
-        0
-      );
-
-      return {
-        Date: trf.date || '',
-        'STR Ref #': trf.strRefNumber || '',
-        'Transfer #': trf.transferNumber || '',
-        Status: trf.status || 'PENDING',
-        'From Branch': trf.fromBranchName || trf.fromBranchCode || '',
-        'To Branch': trf.toBranchName || trf.toBranchCode || '',
-        'Items Summary': activeItems
-          .map((i) => `${i.description} (${i.quantity} ${i.uom})`)
-          .join('; '),
-        'Active Lines': activeItems.length,
-        'Cancelled Lines': cancelledCount,
-        'Total Active Qty': totalActiveQty,
-        'Total Value (PHP)': Number(totalActiveAmount.toFixed(2)),
-        'Prepared By': trf.preparedBy || '',
-        'Reviewed By': trf.reviewedBy || '',
-        'Reviewed At': trf.reviewedAt ? formatStrDateTime(trf.reviewedAt) : '',
-        'Received By': trf.receivedBy || '',
-        'Received At': trf.receivedAt ? formatStrDateTime(trf.receivedAt) : '',
-        Remarks: trf.remarks || '',
-      };
-    });
-
-    const lineItemRows: Array<Record<string, string | number>> = [];
-    source.forEach((trf) => {
-      const safeLines = Array.isArray(trf.items) ? trf.items : [];
-      safeLines.forEach((line) => {
-        const qty = Number(line.quantity) || 0;
-        const price = Number(line.unitPrice) || 0;
-        lineItemRows.push({
-          Date: trf.date || '',
-          'STR Ref #': trf.strRefNumber || '',
-          'Transfer #': trf.transferNumber || '',
-          'STR Status': trf.status || 'PENDING',
-          'From Location': trf.fromBranchName || trf.fromBranchCode || '',
-          'To Location': trf.toBranchName || trf.toBranchCode || '',
-          'Item Code': line.itemCode || '',
-          Description: line.description || '',
-          Category: line.category || '',
-          'Batch / Exp': line.batchNo || '',
-          UOM: line.uom || '',
-          Price: price,
-          Qty: qty,
-          'Line Total': Number((qty * price).toFixed(2)),
-          'Item Status': line.itemStatus || (trf.status === 'CANCELLED' ? 'CANCELLED' : 'ACTIVE'),
-          'Cancel Reason': line.cancelReason || '',
-          'Prepared By': trf.preparedBy || '',
-          'Reviewed By': trf.reviewedBy || '',
-          'Received By': trf.receivedBy || '',
-          Remarks: trf.remarks || '',
-        });
-      });
-    });
-
-    const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
-    summarySheet['!cols'] = [
-      { wch: 12 },
-      { wch: 16 },
-      { wch: 18 },
-      { wch: 12 },
-      { wch: 18 },
-      { wch: 18 },
-      { wch: 42 },
-      { wch: 12 },
-      { wch: 14 },
-      { wch: 14 },
-      { wch: 16 },
-      { wch: 18 },
-      { wch: 18 },
-      { wch: 20 },
-      { wch: 18 },
-      { wch: 20 },
-      { wch: 28 },
-    ];
-
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, summarySheet, 'STR History Summary');
-
-    if (lineItemRows.length > 0) {
-      const itemsSheet = XLSX.utils.json_to_sheet(lineItemRows);
-      itemsSheet['!cols'] = [
-        { wch: 12 },
-        { wch: 16 },
-        { wch: 18 },
-        { wch: 12 },
-        { wch: 18 },
-        { wch: 18 },
-        { wch: 14 },
-        { wch: 36 },
-        { wch: 22 },
-        { wch: 16 },
-        { wch: 10 },
-        { wch: 10 },
-        { wch: 8 },
-        { wch: 12 },
-        { wch: 12 },
-        { wch: 24 },
-        { wch: 18 },
-        { wch: 18 },
-        { wch: 18 },
-        { wch: 28 },
-      ];
-      XLSX.utils.book_append_sheet(workbook, itemsSheet, 'STR Line Items');
-    }
-
-    const filename = `FBC_STR_History_${new Date().toISOString().slice(0, 10)}.xlsx`;
     XLSX.writeFile(workbook, filename);
     showExportToast(filename);
   };
@@ -1012,9 +878,9 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       )
         .trim()
         .toUpperCase();
-      const batchNo = String(rawBatch ?? '').trim();
+      const batchNo = String(rawBatch ?? refMatch?.batchNo ?? '').trim();
       const expiryDate =
-        normalizeExpiryDate(rawExpiry) || normalizeExpiryDate(batchNo) || '';
+        normalizeExpiryDate(rawExpiry) || normalizeExpiryDate(batchNo);
       const uomRaw = String(rawUom ?? refMatch?.uom ?? 'Pack').trim();
       const matchedUom =
         WAREHOUSE_UOMS.find((u) => u.toLowerCase() === uomRaw.toLowerCase()) || uomRaw || 'Pack';
@@ -1165,8 +1031,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         'Item Code': '01-0001',
         Description: 'SAMPLE ITEM DESCRIPTION',
         Category: categoryOptions[0] || 'BEVERAGE',
-        'Batch / Exp': '',
-        'Expiry Date': '',
+        'Batch / Exp': '12-31-26',
+        'Expiry Date': '2026-12-31',
         UOM: 'Pack',
         Price: 0,
         Min: 2,
@@ -1437,6 +1303,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         setItemCategory(match.category);
       }
       if (match.uom) setItemUom(match.uom);
+      if (match.batchNo && !itemBatch.trim()) setItemBatch(match.batchNo);
       if (match.unitPrice > 0) setItemPrice(String(match.unitPrice));
       if (!editingItem) setItemReorder(String(match.reorderLevel));
     }
@@ -1463,6 +1330,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         setItemCategory(match.category);
       }
       if (match.uom) setItemUom(match.uom);
+      if (match.batchNo && !itemBatch.trim()) setItemBatch(match.batchNo);
       if (match.unitPrice > 0) setItemPrice(String(match.unitPrice));
       setItemReorder(String(match.reorderLevel));
     }
@@ -1511,7 +1379,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         ?.itemCode ||
       '';
 
-    const resolvedExpiry = normalizeExpiryDate(itemExpiryDate) || '';
+    const resolvedExpiry =
+      normalizeExpiryDate(itemExpiryDate) || normalizeExpiryDate(itemBatch);
     const effectiveQty = editingItem
       ? isSuperAdmin
         ? parsedQty
@@ -1682,6 +1551,13 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
   const handleSelectStockItemForLine = (chosen: WarehouseInventoryItem) => {
     if (pickerLineIdx === null) return;
+    if ((Number(chosen.quantity) || 0) <= 0) {
+      showErrorAlert(
+        '0 Quantity Not Selectable',
+        `"${chosen.description}" currently has 0 quantity on hand in ${getBranchByCode(fromBranchCode)?.name || fromBranchCode}. Items with 0 quantity cannot be selected in a new STR.`
+      );
+      return;
+    }
     const resolvedCode =
       (chosen.itemCode || '').trim() ||
       findStockReferenceByDescription(chosen.description, inventoryItems, fromBranchCode)
@@ -1715,6 +1591,16 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         (s.description || '').toLowerCase() === (catItem.description || '').toLowerCase() &&
         (s.batchNo || '').toLowerCase() === (catItem.batchNo || '').toLowerCase()
     );
+    if (
+      isMonitoredWarehouseBranch(fromBranchCode) &&
+      (!matchedIssuing || (Number(matchedIssuing.quantity) || 0) <= 0)
+    ) {
+      showErrorAlert(
+        '0 Quantity Not Selectable',
+        `"${catItem.description}" has 0 quantity on hand in ${getBranchByCode(fromBranchCode)?.name || fromBranchCode}. Items with 0 quantity cannot be selected in a new STR.`
+      );
+      return;
+    }
     const resolvedCode =
       (matchedIssuing?.itemCode || catItem.itemCode || '').trim();
     setLineItems((prev) =>
@@ -1737,12 +1623,37 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   };
 
   const handleStrLineCodeChange = (lineIdx: number, nextCode: string) => {
+    const trimmed = nextCode.trim().toLowerCase();
     const ref = findStockReferenceByCode(nextCode, inventoryItems, fromBranchCode);
-    const issuingExact = nextCode.trim()
+    const issuingExact = trimmed
       ? issuingBranchStock.find(
-          (s) => (s.itemCode || '').trim().toLowerCase() === nextCode.trim().toLowerCase()
+          (s) => (s.itemCode || '').trim().toLowerCase() === trimmed
         )
       : undefined;
+
+    const isExactMatchZeroStock = Boolean(
+      trimmed &&
+        ((issuingExact && (Number(issuingExact.quantity) || 0) <= 0) ||
+          (isMonitoredWarehouseBranch(fromBranchCode) &&
+            !issuingExact &&
+            ref &&
+            (ref.itemCode || '').trim().toLowerCase() === trimmed))
+    );
+
+    if (isExactMatchZeroStock) {
+      showErrorAlert(
+        '0 Quantity Not Selectable',
+        `"${issuingExact?.description || ref?.description || nextCode}" has 0 quantity on hand in ${getBranchByCode(fromBranchCode)?.name || fromBranchCode} and cannot be selected in a new STR.`
+      );
+      setLineItems((prev) =>
+        prev.map((row, idx) =>
+          idx === lineIdx
+            ? { ...row, itemId: '', itemCode: '', description: '' }
+            : row
+        )
+      );
+      return;
+    }
 
     setLineItems((prev) =>
       prev.map((row, idx) => {
@@ -1864,6 +1775,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
     if (isMonitoredWarehouseBranch(fromBranchCode)) {
       const deductionCheck = new Map<string, number>();
+      const zeroStockErrors: string[] = [];
       const stockWarnings: string[] = [];
       for (const line of cleanedLines) {
         const matchedItem =
@@ -1877,9 +1789,9 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
               (i.batchNo || '').toLowerCase() === (line.batchNo || '').toLowerCase()
           );
 
-        if (!matchedItem) {
-          stockWarnings.push(
-            `• ${line.description}: Not currently in ${fromBranch.name} inventory (Req: ${line.quantity} ${line.uom})`
+        if (!matchedItem || (Number(matchedItem.quantity) || 0) <= 0) {
+          zeroStockErrors.push(
+            `• ${line.description}: 0 quantity available in ${fromBranch.name}`
           );
         } else {
           const prevPlanned = deductionCheck.get(matchedItem.id) || 0;
@@ -1893,16 +1805,24 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         }
       }
 
+      if (zeroStockErrors.length > 0) {
+        showErrorAlert(
+          '0-Quantity Item Not Allowed',
+          `Items with 0 quantity cannot be selected or submitted in a new STR (${fromBranch.name}): ${zeroStockErrors.join(' ')}`
+        );
+        return;
+      }
+
       if (stockWarnings.length > 0) {
         const warnResult = await yellowCabSwal.fire({
           icon: 'warning',
-          title: 'Some Items Are Unavailable or Low Stock',
+          title: 'Requested Quantity Exceeds Available Stock',
           html: `<div style="font-size:12px;text-align:left;line-height:1.5;">
-            <p style="margin-bottom:6px;">These requested items exceed or are missing in <strong>${fromBranch.name}</strong>:</p>
+            <p style="margin-bottom:6px;">These requested items exceed current balance in <strong>${fromBranch.name}</strong>:</p>
             <div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:8px;padding:8px 10px;color:#9f1239;font-family:monospace;font-size:11px;max-height:140px;overflow:auto;">
               ${stockWarnings.join('<br/>')}
             </div>
-            <p style="margin-top:8px;">Submit as <strong>PENDING</strong> anyway so Super Admin can review and cancel unavailable items?</p>
+            <p style="margin-top:8px;">Submit as <strong>PENDING</strong> anyway so Super Admin can adjust quantities or review?</p>
           </div>`,
           showCancelButton: true,
           confirmButtonText: 'Submit Pending STR',
@@ -2026,28 +1946,36 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
           (i.description || '').toLowerCase() === lineDesc
       );
 
-    const origOutMov =
-      stockMovements.find(
-        (m) =>
-          m.movementType === 'TRANSFER_OUT' &&
-          m.refNumber === trf.strRefNumber &&
-          m.transferNumber === trf.transferNumber &&
-          m.branchCode === trf.fromBranchCode &&
-          (m.description || '').toLowerCase() === lineDesc &&
-          ((m.batchNo || '').toLowerCase() === lineBatch ||
-            (!lineBatch && (m.batchNo || '').toLowerCase() === 'general'))
-      ) ||
-      stockMovements.find(
-        (m) =>
-          m.movementType === 'TRANSFER_OUT' &&
-          m.refNumber === trf.strRefNumber &&
-          m.transferNumber === trf.transferNumber &&
-          m.branchCode === trf.fromBranchCode &&
-          (m.description || '').toLowerCase() === lineDesc
-      );
+    const origLineIndex = (trf.items || []).findIndex(
+      (orig, i) => getLineKey(orig, i) === line.id
+    );
+    const origLine = origLineIndex >= 0 ? trf.items[origLineIndex] : undefined;
+    const isOrigActive = Boolean(origLine && origLine.itemStatus !== 'CANCELLED');
 
-    const reservedByStr = origOutMov
-      ? Math.max(0, (Number(origOutMov.previousQty) || 0) - (Number(origOutMov.newQty) || 0))
+    const origOutMov = isOrigActive
+      ? stockMovements.find(
+          (m) =>
+            m.movementType === 'TRANSFER_OUT' &&
+            m.refNumber === trf.strRefNumber &&
+            m.transferNumber === trf.transferNumber &&
+            m.branchCode === trf.fromBranchCode &&
+            (m.description || '').toLowerCase() === lineDesc &&
+            (m.batchNo || '').toLowerCase() === (lineBatch || 'general')
+        ) ||
+        stockMovements.find(
+          (m) =>
+            m.movementType === 'TRANSFER_OUT' &&
+            m.refNumber === trf.strRefNumber &&
+            m.transferNumber === trf.transferNumber &&
+            m.branchCode === trf.fromBranchCode &&
+            (m.description || '').toLowerCase() === lineDesc
+        )
+      : undefined;
+
+    const reservedByStr = isOrigActive
+      ? origOutMov
+        ? Math.max(0, (Number(origOutMov.previousQty) || 0) - (Number(origOutMov.newQty) || 0))
+        : Number(origLine?.quantity) || 0
       : 0;
     const currentOnHand = matchedItem ? Number(matchedItem.quantity) || 0 : 0;
     const effectiveAvailable = currentOnHand + reservedByStr;
@@ -2095,7 +2023,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       reservedByStr,
       effectiveAvailable,
       isUnavailable: false,
-      statusLabel: `Available (${currentOnHand} left after STR)`,
+      statusLabel: `Available (${effectiveAvailable} total / ${currentOnHand} on hand)`,
     };
   };
 
@@ -2109,16 +2037,26 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     }
     const initialCancelled = new Set<string>();
     const initialReasons: Record<string, string> = {};
-    (trf.items || []).forEach((item, idx) => {
+    const initialDraft = (trf.items || []).map((item, idx) => {
       const key = getLineKey(item, idx);
       if (item.itemStatus === 'CANCELLED') {
         initialCancelled.add(key);
         if (item.cancelReason) initialReasons[key] = item.cancelReason;
       }
+      return {
+        ...item,
+        id: key,
+        quantity: Math.max(1, Number(item.quantity) || 1),
+      };
     });
     setReviewingTransfer(trf);
+    setReviewDraftItems(initialDraft);
+    setReviewAddedLineIds(new Set());
     setReviewCancelledIds(initialCancelled);
     setReviewCancelReasons(initialReasons);
+    setIsReviewAddPickerOpen(false);
+    setReviewPickerSearch('');
+    setReviewPickerCategory('ALL');
   };
 
   const handleToggleReviewCancelItem = (itemId: string) => {
@@ -2133,13 +2071,98 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     });
   };
 
+  const handleUpdateReviewLineQty = (lineKey: string, nextQtyRaw: number) => {
+    const cleanQty = Math.max(0, Math.floor(Number(nextQtyRaw) || 0));
+    setReviewDraftItems((prev) =>
+      prev.map((item, idx) =>
+        getLineKey(item, idx) === lineKey ? { ...item, quantity: cleanQty } : item
+      )
+    );
+  };
+
+  const handleRemoveAddedReviewLine = (lineKey: string) => {
+    if (!reviewAddedLineIds.has(lineKey)) return;
+    setReviewDraftItems((prev) =>
+      prev.filter((item, idx) => getLineKey(item, idx) !== lineKey)
+    );
+    setReviewAddedLineIds((prev) => {
+      const next = new Set(prev);
+      next.delete(lineKey);
+      return next;
+    });
+    setReviewCancelledIds((prev) => {
+      const next = new Set(prev);
+      next.delete(lineKey);
+      return next;
+    });
+  };
+
+  const handleAddItemToReviewStr = (chosen: WarehouseInventoryItem) => {
+    if (!reviewingTransfer) return;
+    if (
+      isMonitoredWarehouseBranch(reviewingTransfer.fromBranchCode) &&
+      (Number(chosen.quantity) || 0) <= 0
+    ) {
+      showErrorAlert(
+        'Out of Stock (0 Quantity)',
+        `"${chosen.description}" has 0 quantity in ${reviewingTransfer.fromBranchName}.`
+      );
+      return;
+    }
+
+    const existingIdx = reviewDraftItems.findIndex(
+      (line) =>
+        (line.itemId && line.itemId === chosen.id) ||
+        ((line.description || '').toLowerCase() === (chosen.description || '').toLowerCase() &&
+          (line.batchNo || '').toLowerCase() === (chosen.batchNo || '').toLowerCase())
+    );
+
+    if (existingIdx >= 0) {
+      const existingLine = reviewDraftItems[existingIdx];
+      const existingKey = getLineKey(existingLine, existingIdx);
+      setReviewDraftItems((prev) =>
+        prev.map((line, i) =>
+          i === existingIdx ? { ...line, quantity: (Number(line.quantity) || 0) + 1 } : line
+        )
+      );
+      if (reviewCancelledIds.has(existingKey)) {
+        handleToggleReviewCancelItem(existingKey);
+      }
+      showActionSuccessToast(`Added +1 quantity to "${chosen.description}"`);
+      setIsReviewAddPickerOpen(false);
+      return;
+    }
+
+    const newKey = `rev-line-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const newLine: StockTransferLineItem = {
+      id: newKey,
+      itemId: chosen.id,
+      itemCode: chosen.itemCode,
+      description: chosen.description,
+      category: chosen.category,
+      batchNo: chosen.batchNo,
+      uom: chosen.uom,
+      unitPrice: Number(chosen.unitPrice) || 0,
+      quantity: 1,
+      itemStatus: 'APPROVED',
+    };
+    setReviewDraftItems((prev) => [...prev, newLine]);
+    setReviewAddedLineIds((prev) => {
+      const next = new Set(prev);
+      next.add(newKey);
+      return next;
+    });
+    showActionSuccessToast(`Added "${chosen.description}" to STR review`);
+    setIsReviewAddPickerOpen(false);
+  };
+
   const handleAutoMarkUnavailableReview = () => {
     if (!reviewingTransfer) return;
     const nextCancelled = new Set(reviewCancelledIds);
     const nextReasons = { ...reviewCancelReasons };
     let markedCount = 0;
 
-    (reviewingTransfer.items || []).forEach((line, idx) => {
+    reviewDraftItems.forEach((line, idx) => {
       const key = getLineKey(line, idx);
       const info = getReviewLineStockInfo(reviewingTransfer, line);
       if (info.isUnavailable) {
@@ -2162,11 +2185,58 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
   const handleSubmitReviewStrModal = async () => {
     if (!reviewingTransfer || isSavingReview) return;
+
+    const invalidActiveLines = reviewDraftItems.filter((line, idx) => {
+      const key = getLineKey(line, idx);
+      return !reviewCancelledIds.has(key) && (Number(line.quantity) || 0) < 1;
+    });
+
+    if (invalidActiveLines.length > 0) {
+      showErrorAlert(
+        'Invalid Quantity',
+        `Approved item "${invalidActiveLines[0].description}" must have a quantity of at least 1 (or mark it as Cancel Item).`
+      );
+      return;
+    }
+
+    const overRequestedLines = reviewDraftItems.filter((line, idx) => {
+      const key = getLineKey(line, idx);
+      if (reviewCancelledIds.has(key)) return false;
+      const info = getReviewLineStockInfo(reviewingTransfer, line);
+      return info.isFromMonitored && line.quantity > info.effectiveAvailable;
+    });
+
+    if (overRequestedLines.length > 0) {
+      const warnConfirm = await yellowCabSwal.fire({
+        icon: 'warning',
+        title: 'Quantity Exceeds Issuing Stock',
+        html: `<div style="font-size:12px;text-align:left;line-height:1.5;">
+          <p style="margin-bottom:6px;">${overRequestedLines.length} approved line(s) exceed available inventory in <strong>${reviewingTransfer.fromBranchName}</strong>:</p>
+          <ul style="padding-left:18px;margin:0;color:#9f1239;">
+            ${overRequestedLines
+              .slice(0, 4)
+              .map((l) => `<li><strong>${l.description}</strong> (Req: ${l.quantity} ${l.uom})</li>`)
+              .join('')}
+          </ul>
+          <p style="margin-top:8px;">Proceed and save reviewed STR anyway?</p>
+        </div>`,
+        showCancelButton: true,
+        confirmButtonText: 'Save Anyway',
+        cancelButtonText: 'Go Back & Adjust',
+      });
+      if (!warnConfirm.isConfirmed) return;
+    }
+
     setIsSavingReview(true);
     try {
       const cancelledIds = Array.from(reviewCancelledIds);
-      await onReviewStockTransfer(reviewingTransfer.id, cancelledIds, reviewCancelReasons);
-      const totalLines = (reviewingTransfer.items || []).length;
+      await onReviewStockTransfer(
+        reviewingTransfer.id,
+        cancelledIds,
+        reviewCancelReasons,
+        reviewDraftItems
+      );
+      const totalLines = reviewDraftItems.length;
       const approvedCount = Math.max(0, totalLines - cancelledIds.length);
       showActionSuccessToast(
         approvedCount === 0
@@ -2174,8 +2244,11 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
           : `STR ${reviewingTransfer.strRefNumber} reviewed (${approvedCount} approved, ${cancelledIds.length} cancelled)`
       );
       setReviewingTransfer(null);
+      setReviewDraftItems([]);
+      setReviewAddedLineIds(new Set());
       setReviewCancelledIds(new Set());
       setReviewCancelReasons({});
+      setIsReviewAddPickerOpen(false);
     } catch (err) {
       console.error('Failed reviewing STR:', err);
       showErrorAlert('Review Failed', 'Could not save STR review. Please try again.');
@@ -2201,27 +2274,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       } catch (err) {
         console.error('Failed marking STR received:', err);
         showErrorAlert('Update Failed', 'Could not mark STR as received. Please try again.');
-      }
-    }
-  };
-
-  const handleConfirmDeleteStr = async (trf: StockTransferRequisition) => {
-    if (!onDeleteStockTransfer || !isSuperAdmin) return;
-    const result = await yellowCabSwal.fire({
-      icon: 'warning',
-      title: `Delete STR ${trf.strRefNumber}?`,
-      text: `This will permanently delete STR ${trf.strRefNumber} (${trf.fromBranchName} -> ${trf.toBranchName}), remove its linked Stock Movement Ledger entries, and reverse any stock deductions/additions applied to monitored branch inventory.`,
-      showCancelButton: true,
-      confirmButtonText: 'Delete STR',
-      cancelButtonText: 'Cancel',
-    });
-    if (result.isConfirmed) {
-      try {
-        await onDeleteStockTransfer(trf.id);
-        showActionSuccessToast(`Deleted STR ${trf.strRefNumber} and reversed linked stock.`);
-      } catch (err) {
-        console.error('Failed deleting STR:', err);
-        showErrorAlert('Delete Failed', 'Could not delete STR record. Please try again.');
       }
     }
   };
@@ -3599,13 +3651,21 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                 </div>
 
                 <datalist id="str-item-code-list">
-                  {strReferences
-                    .filter((r) => Boolean(r.itemCode))
-                    .map((r) => (
-                      <option key={`str-code-${r.itemCode}-${r.description}`} value={r.itemCode}>
-                        {r.description}
-                      </option>
-                    ))}
+                  {(isMonitoredWarehouseBranch(fromBranchCode)
+                    ? issuingBranchStock
+                        .filter((s) => Boolean(s.itemCode) && (Number(s.quantity) || 0) > 0)
+                        .map((s) => (
+                          <option key={`str-code-${s.id}`} value={s.itemCode}>
+                            {s.description} ({s.quantity} {s.uom})
+                          </option>
+                        ))
+                    : strReferences
+                        .filter((r) => Boolean(r.itemCode))
+                        .map((r) => (
+                          <option key={`str-code-${r.itemCode}-${r.description}`} value={r.itemCode}>
+                            {r.description}
+                          </option>
+                        )))}
                 </datalist>
 
                 {/* Mobile STR Line Items Cards */}
@@ -3676,7 +3736,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           </div>
                         )}
 
-                        <div className="grid grid-cols-2 gap-2 items-start">
+                        <div className="grid grid-cols-3 gap-2 items-start">
                           <div>
                             <label className="block text-[9px] font-black uppercase text-zinc-500 mb-0.5">
                               Item Code
@@ -3688,18 +3748,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               onChange={(e) => handleStrLineCodeChange(idx, e.target.value)}
                               placeholder="01-0601"
                               className="w-full px-2 py-1.5 rounded-lg border border-zinc-300 bg-white font-mono text-[11px] font-bold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[9px] font-black uppercase text-zinc-500 mb-0.5">
-                              Batch / Exp (Optional)
-                            </label>
-                            <input
-                              type="text"
-                              value={line.batchNo || ''}
-                              onChange={(e) => handleUpdateLineItem(idx, 'batchNo', e.target.value)}
-                              placeholder="Optional"
-                              className="w-full px-2 py-1.5 rounded-lg border border-zinc-300 bg-white font-mono text-[11px] text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
                             />
                           </div>
                           <div>
@@ -3754,9 +3802,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <th className="px-3 py-1.5 w-10 text-center">#</th>
                         <th className="px-2 py-1.5 w-28">Item Code</th>
                         <th className="px-3 py-1.5">Pick Item</th>
-                        <th className="px-2 py-1.5 w-28">Batch / Exp</th>
-                        <th className="px-3 py-1.5 w-24">UOM</th>
-                        <th className="px-3 py-1.5 w-24 text-right">Qty</th>
+                        <th className="px-3 py-1.5 w-28">UOM</th>
+                        <th className="px-3 py-1.5 w-28 text-right">Qty</th>
                         <th className="px-3 py-1.5 w-10"></th>
                       </tr>
                     </thead>
@@ -3828,15 +3875,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                   {line.description ? 'Change Item' : 'Search Item'}
                                 </button>
                               </div>
-                            </td>
-                            <td className="p-1.5">
-                              <input
-                                type="text"
-                                value={line.batchNo || ''}
-                                onChange={(e) => handleUpdateLineItem(idx, 'batchNo', e.target.value)}
-                                placeholder="Optional"
-                                className="w-full px-2 py-1.5 rounded-lg border border-zinc-300 font-mono text-[11px] text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                              />
                             </td>
                             <td className="p-1.5">
                               <div
@@ -3973,78 +4011,21 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                   </span>
                 )}
               </div>
-              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-                <div className="relative flex-1 sm:flex-initial sm:min-w-[200px]">
-                  <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={strSearch}
-                    onChange={(e) => setStrSearch(e.target.value)}
-                    placeholder="Search STR #, branch, item..."
-                    className="w-full pl-8 pr-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  />
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <label className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-zinc-600">
-                    <span>From</span>
-                    <input
-                      id="str-filter-start-date"
-                      type="date"
-                      value={strStartDate}
-                      max={strEndDate || undefined}
-                      onChange={(e) => setStrStartDate(e.target.value)}
-                      aria-label="Filter STR history from date"
-                      className="px-2 py-1 rounded-lg border border-zinc-300 bg-white text-xs font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                    />
-                  </label>
-                  <label className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-zinc-600">
-                    <span>To</span>
-                    <input
-                      id="str-filter-end-date"
-                      type="date"
-                      value={strEndDate}
-                      min={strStartDate || undefined}
-                      onChange={(e) => setStrEndDate(e.target.value)}
-                      aria-label="Filter STR history to date"
-                      className="px-2 py-1 rounded-lg border border-zinc-300 bg-white text-xs font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                    />
-                  </label>
-                  {(strSearch || strStartDate || strEndDate) && (
-                    <button
-                      id="btn-clear-str-filters"
-                      type="button"
-                      onClick={() => {
-                        setStrSearch('');
-                        setStrStartDate('');
-                        setStrEndDate('');
-                      }}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] font-bold cursor-pointer transition-colors"
-                      title="Clear search and date range filters"
-                    >
-                      <X className="w-3 h-3" />
-                      <span>Clear</span>
-                    </button>
-                  )}
-                </div>
-                <button
-                  id="btn-export-str-history-excel"
-                  type="button"
-                  disabled={filteredTransfers.length === 0}
-                  onClick={() => handleExportStrHistoryExcel(filteredTransfers)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-40 transition-colors"
-                  title="Export filtered STR history records and line items to Excel (.xlsx)"
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                  <span>Export Excel ({filteredTransfers.length})</span>
-                </button>
+              <div className="relative w-full sm:w-auto sm:min-w-[200px]">
+                <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={strSearch}
+                  onChange={(e) => setStrSearch(e.target.value)}
+                  placeholder="Search STR #, branch, item..."
+                  className="w-full pl-8 pr-2.5 py-1 rounded-lg border border-zinc-300 bg-white text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
               </div>
             </div>
 
             {filteredTransfers.length === 0 ? (
               <div className="p-6 text-center text-xs text-zinc-500">
-                {strSearch || strStartDate || strEndDate
-                  ? 'No Stock Transfer Requisitions match your search or date range.'
-                  : 'No Stock Transfer Requisitions recorded yet.'}
+                No Stock Transfer Requisitions recorded yet.
               </div>
             ) : (
               <>
@@ -4173,38 +4154,33 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           </div>
                         </div>
 
-                        {(isPending || (isSuperAdmin && Boolean(onDeleteStockTransfer))) && (
-                          <div className="flex flex-wrap items-center justify-end gap-1.5 pt-2 border-t border-zinc-200/80">
-                            {isPending && isSuperAdmin && !trf.reviewedBy && (
-                              <button
-                                type="button"
-                                onClick={() => handleConfirmReviewStr(trf)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
-                              >
-                                Review Items
-                              </button>
-                            )}
-                            {isPending && (
-                              <button
-                                type="button"
-                                onClick={() => handleConfirmReceiveStr(trf)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
-                              >
-                                <Check className="w-3 h-3" /> Mark Received
-                              </button>
-                            )}
-                            {isSuperAdmin && onDeleteStockTransfer && (
-                              <button
-                                type="button"
-                                onClick={() => handleConfirmDeleteStr(trf)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
-                                title="Delete STR record and reverse linked stock"
-                              >
-                                <Trash2 className="w-3 h-3" /> Delete
-                              </button>
-                            )}
-                          </div>
-                        )}
+                        <div className="flex flex-wrap items-center justify-end gap-1.5 pt-2 border-t border-zinc-200/80">
+                          {isSuperAdmin && isPending && !trf.reviewedBy && (
+                            <button
+                              type="button"
+                              onClick={() => handleConfirmReviewStr(trf)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
+                            >
+                              Review Items
+                            </button>
+                          )}
+                          {isPending && (
+                            <button
+                              type="button"
+                              onClick={() => handleConfirmReceiveStr(trf)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
+                            >
+                              <Check className="w-3 h-3" /> Mark Received
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleExportGoogleSheetXlsx([trf])}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-bold whitespace-nowrap cursor-pointer"
+                          >
+                            <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -4221,6 +4197,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <th className="px-3 py-2 font-black">From → To</th>
                         <th className="px-3 py-2 font-black">Items</th>
                         <th className="px-3 py-2 font-black">Signatories & Receipt Details</th>
+                        <th className="px-3 py-2 font-black text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-200">
@@ -4308,55 +4285,33 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                 </button>
                               </div>
                             </td>
-                            <td className="px-3 py-2 text-[11px] text-zinc-700 space-y-1">
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <span>
-                                  Prep: <strong>{trf.preparedBy}</strong> · Rev:{' '}
-                                  {trf.reviewedBy ? (
-                                    <strong className="text-zinc-900">
-                                      {trf.reviewedBy}
-                                      {trf.reviewedAt && (
-                                        <span className="ml-1 font-mono font-normal text-[10px] text-zinc-500">
-                                          ({formatStrDateTime(trf.reviewedAt)})
-                                        </span>
-                                      )}
-                                    </strong>
-                                  ) : (
-                                    <span className="text-amber-700 italic">
-                                      Awaiting Super Admin review
-                                    </span>
-                                  )}
-                                </span>
-                                {isSuperAdmin && isPending && !trf.reviewedBy && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleConfirmReviewStr(trf)}
-                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase cursor-pointer"
-                                    title="Check requested items & cancel unavailable stock (Super Admin only)"
-                                  >
-                                    Review Items
-                                  </button>
+                            <td className="px-3 py-2 text-[11px] text-zinc-700 space-y-0.5">
+                              <div>
+                                Prep: <strong>{trf.preparedBy}</strong> · Rev:{' '}
+                                {trf.reviewedBy ? (
+                                  <strong className="text-zinc-900">
+                                    {trf.reviewedBy}
+                                    {trf.reviewedAt && (
+                                      <span className="ml-1 font-mono font-normal text-[10px] text-zinc-500">
+                                        ({formatStrDateTime(trf.reviewedAt)})
+                                      </span>
+                                    )}
+                                  </strong>
+                                ) : (
+                                  <span className="text-amber-700 italic">
+                                    Awaiting Super Admin review
+                                  </span>
                                 )}
                               </div>
-                              <div className="flex flex-wrap items-center gap-1.5">
+                              <div>
                                 {isCancelled ? (
                                   <span className="text-rose-700 font-semibold">
                                     Cancelled during Super Admin review
                                   </span>
                                 ) : isPending ? (
-                                  <>
-                                    <span className="text-amber-700 font-semibold">
-                                      Recv: Pending receipt confirmation
-                                    </span>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleConfirmReceiveStr(trf)}
-                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase cursor-pointer"
-                                      title={`Mark as Received by ${currentUser.name}`}
-                                    >
-                                      <Check className="w-3 h-3" /> Mark Received
-                                    </button>
-                                  </>
+                                  <span className="text-amber-700 font-semibold">
+                                    Recv: Pending receipt confirmation
+                                  </span>
                                 ) : (
                                   <span className="text-emerald-800">
                                     Recv: <strong>{trf.receivedBy}</strong>
@@ -4367,16 +4322,38 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                     )}
                                   </span>
                                 )}
-                                {isSuperAdmin && onDeleteStockTransfer && (
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-right whitespace-nowrap">
+                              <div className="inline-flex items-center gap-1">
+                                {isSuperAdmin && isPending && !trf.reviewedBy && (
                                   <button
                                     type="button"
-                                    onClick={() => handleConfirmDeleteStr(trf)}
-                                    className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-black uppercase cursor-pointer"
-                                    title="Delete STR record and reverse linked stock"
+                                    onClick={() => handleConfirmReviewStr(trf)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase cursor-pointer"
+                                    title="Check requested items & cancel unavailable stock (Super Admin only)"
                                   >
-                                    <Trash2 className="w-3 h-3" /> Delete
+                                    Review Items
                                   </button>
                                 )}
+                                {isPending && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleConfirmReceiveStr(trf)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase cursor-pointer"
+                                    title={`Mark as Received by ${currentUser.name}`}
+                                  >
+                                    <Check className="w-3 h-3" /> Mark Received
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleExportGoogleSheetXlsx([trf])}
+                                  className="p-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 cursor-pointer"
+                                  title="Export STR to Excel"
+                                >
+                                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -4944,7 +4921,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                 </div>
                 <div>
                   <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
-                    Batch / Exp <span className="text-zinc-400 font-semibold normal-case">(Optional)</span>
+                    Batch / Exp
                   </label>
                   <input
                     type="text"
@@ -4957,7 +4934,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         setItemExpiryDate(parsed);
                       }
                     }}
-                    placeholder="Optional (leave blank if N/A)"
+                    placeholder="e.g. 10-31-28"
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
                   />
                 </div>
@@ -4981,7 +4958,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
               <div>
                 <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
-                  Expiry Date <span className="text-zinc-400 font-semibold normal-case">(Optional · Near-Expiry Alerts ≤{NEAR_EXPIRY_THRESHOLD_DAYS}d)</span>
+                  Expiry Date (Near-Expiry Alerts ≤{NEAR_EXPIRY_THRESHOLD_DAYS} Days)
                 </label>
                 <div className="flex items-center gap-2">
                   <input
@@ -5322,19 +5299,24 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                   <>
                     <div className="md:hidden divide-y divide-zinc-200">
                       {filteredPickerStock.slice(0, 120).map((item) => {
+                        const qty = Number(item.quantity) || 0;
+                        const isZeroQty = qty <= 0;
                         const isLow = isItemLowStock(item);
                         const expEval = evaluateItemExpiry(item);
                         return (
                           <button
                             key={`mob-pick-${item.id}`}
                             type="button"
+                            disabled={isZeroQty}
                             onClick={() => handleSelectStockItemForLine(item)}
-                            className={`w-full text-left p-3 flex items-start justify-between gap-2 cursor-pointer transition-colors ${
-                              isLow || (expEval.isAlertActive && expEval.status === 'EXPIRED')
-                                ? 'bg-rose-50/70 hover:bg-amber-100/70'
+                            className={`w-full text-left p-3 flex items-start justify-between gap-2 transition-colors ${
+                              isZeroQty
+                                ? 'bg-zinc-100 opacity-60 cursor-not-allowed'
+                                : isLow || (expEval.isAlertActive && expEval.status === 'EXPIRED')
+                                ? 'bg-rose-50/70 hover:bg-amber-100/70 cursor-pointer'
                                 : expEval.isAlertActive
-                                ? 'bg-amber-50/70 hover:bg-amber-100/70'
-                                : 'hover:bg-amber-50'
+                                ? 'bg-amber-50/70 hover:bg-amber-100/70 cursor-pointer'
+                                : 'hover:bg-amber-50 cursor-pointer'
                             }`}
                           >
                             <div className="min-w-0 flex-1">
@@ -5349,16 +5331,26 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                             <div className="text-right shrink-0">
                               <div
                                 className={`font-mono text-xs font-black tabular-nums ${
-                                  isLow ? 'text-rose-700' : 'text-zinc-950'
+                                  isZeroQty
+                                    ? 'text-zinc-500'
+                                    : isLow
+                                    ? 'text-rose-700'
+                                    : 'text-zinc-950'
                                 }`}
                               >
                                 {item.quantity} {item.uom}
                               </div>
                               <div className="flex items-center justify-end gap-1">
-                                {isLow && (
-                                  <span className="text-[9px] font-black uppercase text-rose-600">
-                                    Low
+                                {isZeroQty ? (
+                                  <span className="text-[9px] font-black uppercase text-rose-700">
+                                    0 Stock · Disabled
                                   </span>
+                                ) : (
+                                  isLow && (
+                                    <span className="text-[9px] font-black uppercase text-rose-600">
+                                      Low
+                                    </span>
+                                  )
                                 )}
                                 {expEval.isAlertActive && (
                                   <span
@@ -5391,18 +5383,25 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                       </thead>
                       <tbody className="divide-y divide-zinc-200">
                         {filteredPickerStock.slice(0, 120).map((item) => {
+                          const qty = Number(item.quantity) || 0;
+                          const isZeroQty = qty <= 0;
                           const isLow = isItemLowStock(item);
                           const expEval = evaluateItemExpiry(item);
                           return (
                             <tr
                               key={item.id}
-                              onClick={() => handleSelectStockItemForLine(item)}
-                              className={`cursor-pointer transition-colors ${
-                                isLow || (expEval.isAlertActive && expEval.status === 'EXPIRED')
-                                  ? 'bg-rose-50/70 hover:bg-amber-100/70'
+                              aria-disabled={isZeroQty}
+                              onClick={() => {
+                                if (!isZeroQty) handleSelectStockItemForLine(item);
+                              }}
+                              className={`transition-colors ${
+                                isZeroQty
+                                  ? 'bg-zinc-100 opacity-60 cursor-not-allowed'
+                                  : isLow || (expEval.isAlertActive && expEval.status === 'EXPIRED')
+                                  ? 'bg-rose-50/70 hover:bg-amber-100/70 cursor-pointer'
                                   : expEval.isAlertActive
-                                  ? 'bg-amber-50/70 hover:bg-amber-100/70'
-                                  : 'hover:bg-amber-50'
+                                  ? 'bg-amber-50/70 hover:bg-amber-100/70 cursor-pointer'
+                                  : 'hover:bg-amber-50 cursor-pointer'
                               }`}
                             >
                               <td className="px-3 py-2 font-mono text-[11px] text-zinc-500 whitespace-nowrap">
@@ -5433,10 +5432,19 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               </td>
                               <td
                                 className={`px-3 py-2 text-right font-mono font-black tabular-nums whitespace-nowrap ${
-                                  isLow ? 'text-rose-700' : 'text-zinc-950'
+                                  isZeroQty
+                                    ? 'text-zinc-500'
+                                    : isLow
+                                    ? 'text-rose-700'
+                                    : 'text-zinc-950'
                                 }`}
                               >
-                                {item.quantity}
+                                <span>{item.quantity}</span>
+                                {isZeroQty && (
+                                  <span className="ml-1.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-sans text-[9px] font-black uppercase">
+                                    0 Stock
+                                  </span>
+                                )}
                               </td>
                             </tr>
                           );
@@ -5452,27 +5460,53 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
               ) : (
                 <>
                   <div className="md:hidden divide-y divide-zinc-200">
-                    {filteredPickerCatalog.slice(0, 120).map((catItem, idx) => (
-                      <button
-                        key={`mob-cat-${catItem.itemCode}-${idx}`}
-                        type="button"
-                        onClick={() => handleSelectCatalogItemForLine(catItem)}
-                        className="w-full text-left p-3 flex items-start justify-between gap-2 hover:bg-amber-50 cursor-pointer transition-colors"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="font-bold text-xs text-zinc-900 break-words">
-                            {catItem.description}
+                    {filteredPickerCatalog.slice(0, 120).map((catItem, idx) => {
+                      const matchedIssuing = issuingBranchStock.find(
+                        (s) =>
+                          (s.description || '').toLowerCase() ===
+                            (catItem.description || '').toLowerCase() &&
+                          (s.batchNo || '').toLowerCase() ===
+                            (catItem.batchNo || '').toLowerCase()
+                      );
+                      const onHandQty = matchedIssuing ? Number(matchedIssuing.quantity) || 0 : 0;
+                      const isBlockedZero =
+                        isMonitoredWarehouseBranch(fromBranchCode) && onHandQty <= 0;
+                      return (
+                        <button
+                          key={`mob-cat-${catItem.itemCode}-${idx}`}
+                          type="button"
+                          disabled={isBlockedZero}
+                          onClick={() => handleSelectCatalogItemForLine(catItem)}
+                          className={`w-full text-left p-3 flex items-start justify-between gap-2 transition-colors ${
+                            isBlockedZero
+                              ? 'bg-zinc-100 opacity-60 cursor-not-allowed'
+                              : 'hover:bg-amber-50 cursor-pointer'
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="font-bold text-xs text-zinc-900 break-words">
+                              {catItem.description}
+                            </div>
+                            <div className="text-[10px] font-mono text-zinc-500 mt-0.5">
+                              {catItem.itemCode} · {catItem.category}
+                              {catItem.batchNo ? ` · Batch ${catItem.batchNo}` : ''}
+                            </div>
                           </div>
-                          <div className="text-[10px] font-mono text-zinc-500 mt-0.5">
-                            {catItem.itemCode} · {catItem.category}
-                            {catItem.batchNo ? ` · Batch ${catItem.batchNo}` : ''}
+                          <div className="text-right shrink-0">
+                            <span className="font-mono text-[11px] font-bold text-zinc-700 block">
+                              {isMonitoredWarehouseBranch(fromBranchCode)
+                                ? `${onHandQty} ${catItem.uom}`
+                                : catItem.uom}
+                            </span>
+                            {isBlockedZero && (
+                              <span className="text-[9px] font-black uppercase text-rose-700">
+                                0 Stock · Disabled
+                              </span>
+                            )}
                           </div>
-                        </div>
-                        <span className="font-mono text-[11px] font-bold text-zinc-700 shrink-0">
-                          {catItem.uom}
-                        </span>
-                      </button>
-                    ))}
+                        </button>
+                      );
+                    })}
                   </div>
 
                   <table className="hidden md:table w-full text-left border-collapse text-xs">
@@ -5483,32 +5517,68 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <th className="px-3 py-2">Category</th>
                         <th className="px-3 py-2">Batch</th>
                         <th className="px-3 py-2 text-center">UOM</th>
+                        {isMonitoredWarehouseBranch(fromBranchCode) && (
+                          <th className="px-3 py-2 text-right">On Hand</th>
+                        )}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-200">
-                      {filteredPickerCatalog.slice(0, 120).map((catItem, idx) => (
-                        <tr
-                          key={`${catItem.itemCode}-${idx}`}
-                          onClick={() => handleSelectCatalogItemForLine(catItem)}
-                          className="hover:bg-amber-50 cursor-pointer transition-colors"
-                        >
-                          <td className="px-3 py-2 font-mono text-[11px] text-zinc-500 whitespace-nowrap">
-                            {catItem.itemCode}
-                          </td>
-                          <td className="px-3 py-2 font-bold text-zinc-900">
-                            {catItem.description}
-                          </td>
-                          <td className="px-3 py-2 text-[11px] text-zinc-600 whitespace-nowrap">
-                            {catItem.category}
-                          </td>
-                          <td className="px-3 py-2 font-mono text-[11px] text-zinc-500 whitespace-nowrap">
-                            {catItem.batchNo || '—'}
-                          </td>
-                          <td className="px-3 py-2 text-center font-semibold text-zinc-700 whitespace-nowrap">
-                            {catItem.uom}
-                          </td>
-                        </tr>
-                      ))}
+                      {filteredPickerCatalog.slice(0, 120).map((catItem, idx) => {
+                        const matchedIssuing = issuingBranchStock.find(
+                          (s) =>
+                            (s.description || '').toLowerCase() ===
+                              (catItem.description || '').toLowerCase() &&
+                            (s.batchNo || '').toLowerCase() ===
+                              (catItem.batchNo || '').toLowerCase()
+                        );
+                        const onHandQty = matchedIssuing ? Number(matchedIssuing.quantity) || 0 : 0;
+                        const isBlockedZero =
+                          isMonitoredWarehouseBranch(fromBranchCode) && onHandQty <= 0;
+                        return (
+                          <tr
+                            key={`${catItem.itemCode}-${idx}`}
+                            aria-disabled={isBlockedZero}
+                            onClick={() => {
+                              if (!isBlockedZero) handleSelectCatalogItemForLine(catItem);
+                            }}
+                            className={`transition-colors ${
+                              isBlockedZero
+                                ? 'bg-zinc-100 opacity-60 cursor-not-allowed'
+                                : 'hover:bg-amber-50 cursor-pointer'
+                            }`}
+                          >
+                            <td className="px-3 py-2 font-mono text-[11px] text-zinc-500 whitespace-nowrap">
+                              {catItem.itemCode}
+                            </td>
+                            <td className="px-3 py-2 font-bold text-zinc-900">
+                              {catItem.description}
+                            </td>
+                            <td className="px-3 py-2 text-[11px] text-zinc-600 whitespace-nowrap">
+                              {catItem.category}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-[11px] text-zinc-500 whitespace-nowrap">
+                              {catItem.batchNo || '—'}
+                            </td>
+                            <td className="px-3 py-2 text-center font-semibold text-zinc-700 whitespace-nowrap">
+                              {catItem.uom}
+                            </td>
+                            {isMonitoredWarehouseBranch(fromBranchCode) && (
+                              <td
+                                className={`px-3 py-2 text-right font-mono font-black tabular-nums whitespace-nowrap ${
+                                  isBlockedZero ? 'text-zinc-500' : 'text-zinc-950'
+                                }`}
+                              >
+                                <span>{onHandQty}</span>
+                                {isBlockedZero && (
+                                  <span className="ml-1.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-sans text-[9px] font-black uppercase">
+                                    0 Stock
+                                  </span>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </>
@@ -5853,13 +5923,12 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                 </div>
                 <div>
                   <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
-                    Batch No <span className="text-zinc-400 font-semibold normal-case">(Optional)</span>
+                    Batch No
                   </label>
                   <input
                     type="text"
                     value={ledgerFormBatch}
                     onChange={(e) => setLedgerFormBatch(e.target.value)}
-                    placeholder="Optional"
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 font-mono text-zinc-900"
                   />
                 </div>
@@ -6103,10 +6172,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                 <div className="p-8 text-center text-xs text-zinc-500 space-y-1">
                   <div className="font-bold text-zinc-700">No file loaded yet</div>
                   <div>
-                    Expected columns: <span className="font-mono">Branch, Item Code, Description, Category, Batch / Exp (opt), Expiry Date (opt), UOM, Price, Min, Qty</span>
-                  </div>
-                  <div className="text-[11px] text-zinc-400">
-                    Batch / Exp and Expiry Date are optional and can be left blank.
+                    Expected columns: <span className="font-mono">Branch, Item Code, Description, Category, Batch / Exp, UOM, Price, Min, Qty</span>
                   </div>
                 </div>
               ) : (
@@ -6297,242 +6363,297 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       {/* ===================================================================== */}
       {/* SUPER ADMIN STR ITEM-BY-ITEM REVIEW & CANCELLATION MODAL              */}
       {/* ===================================================================== */}
-      {reviewingTransfer && isSuperAdmin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/75 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-xl border-2 border-zinc-950 shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="bg-zinc-950 text-amber-400 px-4 py-3 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 min-w-0">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <div className="min-w-0">
-                  <h3 className="text-xs font-black uppercase tracking-wider truncate">
-                    Review STR Items · {reviewingTransfer.strRefNumber}
-                  </h3>
-                  <div className="text-[11px] font-mono text-zinc-300 truncate">
-                    {reviewingTransfer.fromBranchName} → {reviewingTransfer.toBranchName} · Prep by{' '}
-                    {reviewingTransfer.preparedBy}
+      {reviewingTransfer && isSuperAdmin && (() => {
+        const reviewBranchStock = inventoryItems
+          .filter((item) => item.branchCode === reviewingTransfer.fromBranchCode)
+          .sort((a, b) => (a.description || '').localeCompare(b.description || ''));
+        const reviewPickerQuery = reviewPickerSearch.trim().toLowerCase();
+        const filteredReviewAddStock = reviewBranchStock.filter((item) => {
+          if (reviewPickerCategory !== 'ALL' && item.category !== reviewPickerCategory) {
+            return false;
+          }
+          if (!reviewPickerQuery) return true;
+          return (
+            (item.description || '').toLowerCase().includes(reviewPickerQuery) ||
+            (item.itemCode || '').toLowerCase().includes(reviewPickerQuery) ||
+            (item.batchNo || '').toLowerCase().includes(reviewPickerQuery) ||
+            (item.category || '').toLowerCase().includes(reviewPickerQuery)
+          );
+        });
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/75 backdrop-blur-xs p-4">
+            <div className="bg-white rounded-xl border-2 border-zinc-950 shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[92vh]">
+              <div className="bg-zinc-950 text-amber-400 px-4 py-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <div className="min-w-0">
+                    <h3 className="text-xs font-black uppercase tracking-wider truncate">
+                      Review STR Items · {reviewingTransfer.strRefNumber}
+                    </h3>
+                    <div className="text-[11px] font-mono text-zinc-300 truncate">
+                      {reviewingTransfer.fromBranchName} → {reviewingTransfer.toBranchName} · Prep by{' '}
+                      {reviewingTransfer.preparedBy}
+                    </div>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setReviewingTransfer(null)}
+                  className="text-zinc-400 hover:text-white cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setReviewingTransfer(null)}
-                className="text-zinc-400 hover:text-white cursor-pointer shrink-0"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
 
-            <div className="px-4 py-2.5 border-b border-zinc-200 bg-zinc-50 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="text-zinc-600">
-                Check each requested item against{' '}
-                <strong className="text-zinc-900">{reviewingTransfer.fromBranchName}</strong>{' '}
-                inventory. Cancel any item not available in stock.
+              <div className="px-4 py-2.5 border-b border-zinc-200 bg-zinc-50 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="text-zinc-600">
+                  Edit requested quantities, add additional items, or cancel unavailable items from{' '}
+                  <strong className="text-zinc-900">{reviewingTransfer.fromBranchName}</strong>.
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsReviewAddPickerOpen((prev) => !prev)}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-black uppercase cursor-pointer shrink-0 transition-colors ${
+                      isReviewAddPickerOpen
+                        ? 'bg-zinc-950 text-amber-400 border-zinc-950'
+                        : 'bg-amber-400 hover:bg-amber-300 text-zinc-950 border-zinc-950'
+                    }`}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    {isReviewAddPickerOpen ? 'Hide Add Item' : 'Add Item / Qty'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAutoMarkUnavailableReview}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 text-[11px] font-black uppercase cursor-pointer shrink-0"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Auto-Cancel Unavailable
+                  </button>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={handleAutoMarkUnavailableReview}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 text-[11px] font-black uppercase cursor-pointer shrink-0"
-              >
-                <AlertTriangle className="w-3.5 h-3.5" />
-                Auto-Cancel Unavailable
-              </button>
-            </div>
 
-            <div className="flex-1 overflow-y-auto">
-              {/* Mobile Review STR Items Cards */}
-              <div className="md:hidden divide-y divide-zinc-200">
-                {(reviewingTransfer.items || []).map((line, idx) => {
-                  const lineKey = getLineKey(line, idx);
-                  const isMarkedCancelled = reviewCancelledIds.has(lineKey);
-                  const stockInfo = getReviewLineStockInfo(reviewingTransfer, line);
-                  return (
-                    <div
-                      key={`mob-rev-${lineKey}`}
-                      className={`p-3.5 space-y-2.5 text-xs ${
-                        isMarkedCancelled
-                          ? 'bg-rose-50/70'
-                          : stockInfo.isUnavailable
-                          ? 'bg-amber-50/50'
-                          : 'bg-white'
-                      }`}
+              {/* Inline Add Item to STR Review Picker Drawer */}
+              {isReviewAddPickerOpen && (
+                <div className="p-3 bg-amber-50/70 border-b border-amber-300 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-black uppercase text-zinc-900">
+                      Add Item from {reviewingTransfer.fromBranchName} Stock (Click item to add or +1)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsReviewAddPickerOpen(false)}
+                      className="text-[11px] font-bold text-zinc-600 hover:text-zinc-950 cursor-pointer"
                     >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <span className="font-mono text-[10px] font-bold text-zinc-500">
-                            Line #{idx + 1}
-                          </span>
-                          <div
-                            className={`font-bold text-sm break-words ${
-                              isMarkedCancelled ? 'line-through text-rose-700' : 'text-zinc-950'
-                            }`}
-                          >
-                            {line.description}
-                          </div>
-                          <div className="text-[10px] font-mono text-zinc-500">
-                            {line.category}
-                            {line.batchNo ? ` · Batch: ${line.batchNo}` : ''}
-                          </div>
-                        </div>
-                        <div className="text-right font-mono font-black tabular-nums shrink-0 text-zinc-950">
-                          {line.quantity} {line.uom}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          {!stockInfo.isFromMonitored ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200 text-[10px] font-bold">
-                              {stockInfo.statusLabel}
-                            </span>
-                          ) : stockInfo.isUnavailable ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-300 text-[10px] font-black">
-                              <AlertTriangle className="w-3 h-3" />
-                              {stockInfo.statusLabel}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold">
-                              <CheckCircle2 className="w-3 h-3" />
-                              {stockInfo.statusLabel}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="inline-flex rounded-lg overflow-hidden border border-zinc-300">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (isMarkedCancelled) handleToggleReviewCancelItem(lineKey);
-                            }}
-                            className={`px-2.5 py-1 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer transition-colors ${
-                              !isMarkedCancelled
-                                ? 'bg-emerald-600 text-white'
-                                : 'bg-white text-zinc-600 hover:bg-zinc-100'
-                            }`}
-                          >
-                            Approve
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!isMarkedCancelled) handleToggleReviewCancelItem(lineKey);
-                            }}
-                            className={`px-2.5 py-1 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer transition-colors ${
-                              isMarkedCancelled
-                                ? 'bg-rose-600 text-white'
-                                : 'bg-white text-zinc-600 hover:bg-rose-50'
-                            }`}
-                          >
-                            Cancel Item
-                          </button>
-                        </div>
-                      </div>
-
-                      {isMarkedCancelled && (
-                        <input
-                          type="text"
-                          value={reviewCancelReasons[lineKey] || ''}
-                          onChange={(e) =>
-                            setReviewCancelReasons((prev) => ({
-                              ...prev,
-                              [lineKey]: e.target.value,
-                            }))
-                          }
-                          placeholder="Reason (default: Not available in inventory)"
-                          className="w-full px-2.5 py-1.5 rounded border border-rose-300 bg-white text-[11px] text-rose-900 placeholder:text-rose-300 focus:outline-none focus:ring-1 focus:ring-rose-400"
-                        />
-                      )}
+                      Close Picker
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative flex-1 min-w-[200px]">
+                      <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={reviewPickerSearch}
+                        onChange={(e) => setReviewPickerSearch(e.target.value)}
+                        placeholder="Search description, code, category..."
+                        className="w-full pl-8 pr-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                      />
                     </div>
-                  );
-                })}
-              </div>
+                    <select
+                      value={reviewPickerCategory}
+                      onChange={(e) => setReviewPickerCategory(e.target.value)}
+                      className="px-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs font-bold text-zinc-800 max-w-[200px] focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    >
+                      <option value="ALL">All Categories</option>
+                      {categoryOptions.map((cat) => (
+                        <option key={`rev-cat-${cat}`} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto rounded-lg border border-zinc-200 bg-white divide-y divide-zinc-100">
+                    {filteredReviewAddStock.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-zinc-500">
+                        No matching items found in {reviewingTransfer.fromBranchName}.
+                      </div>
+                    ) : (
+                      filteredReviewAddStock.slice(0, 60).map((item) => {
+                        const qty = Number(item.quantity) || 0;
+                        const isZero =
+                          isMonitoredWarehouseBranch(reviewingTransfer.fromBranchCode) && qty <= 0;
+                        return (
+                          <button
+                            key={`rev-add-${item.id}`}
+                            type="button"
+                            disabled={isZero}
+                            onClick={() => handleAddItemToReviewStr(item)}
+                            className={`w-full px-3 py-2 text-left flex items-center justify-between gap-2 text-xs transition-colors ${
+                              isZero
+                                ? 'bg-zinc-50 opacity-55 cursor-not-allowed'
+                                : 'hover:bg-amber-50 cursor-pointer'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="font-bold text-zinc-900 truncate">
+                                {item.description}
+                              </div>
+                              <div className="text-[10px] font-mono text-zinc-500 truncate">
+                                {item.itemCode || '—'} · {item.category}
+                                {item.batchNo ? ` · Batch ${item.batchNo}` : ''}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span
+                                className={`font-mono text-[11px] font-black tabular-nums ${
+                                  isZero ? 'text-rose-700' : 'text-zinc-900'
+                                }`}
+                              >
+                                {qty} {item.uom}
+                              </span>
+                              {!isZero && (
+                                <span className="px-2 py-0.5 rounded bg-amber-400 text-zinc-950 text-[10px] font-black uppercase">
+                                  + Add
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
 
-              {/* Desktop Review STR Items Table */}
-              <table className="hidden md:table w-full text-left border-collapse text-xs">
-                <thead className="sticky top-0 bg-zinc-100 text-zinc-700 uppercase text-[10px] font-black border-b border-zinc-200">
-                  <tr>
-                    <th className="px-3 py-2 w-10 text-center">#</th>
-                    <th className="px-3 py-2">Requested Item</th>
-                    <th className="px-3 py-2 text-right">Req Qty</th>
-                    <th className="px-3 py-2">Inventory Check ({reviewingTransfer.fromBranchCode})</th>
-                    <th className="px-3 py-2 text-center">Decision</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-200">
-                  {(reviewingTransfer.items || []).map((line, idx) => {
+              <div className="flex-1 overflow-y-auto">
+                {/* Mobile Review STR Items Cards */}
+                <div className="md:hidden divide-y divide-zinc-200">
+                  {reviewDraftItems.map((line, idx) => {
                     const lineKey = getLineKey(line, idx);
                     const isMarkedCancelled = reviewCancelledIds.has(lineKey);
+                    const isAddedInReview = reviewAddedLineIds.has(lineKey);
+                    const origQty = (reviewingTransfer.items || []).find(
+                      (orig, i) => getLineKey(orig, i) === lineKey
+                    )?.quantity;
                     const stockInfo = getReviewLineStockInfo(reviewingTransfer, line);
                     return (
-                      <tr
-                        key={lineKey}
-                        className={
+                      <div
+                        key={`mob-rev-${lineKey}`}
+                        className={`p-3.5 space-y-2.5 text-xs ${
                           isMarkedCancelled
                             ? 'bg-rose-50/70'
                             : stockInfo.isUnavailable
                             ? 'bg-amber-50/50'
-                            : 'hover:bg-zinc-50'
-                        }
+                            : 'bg-white'
+                        }`}
                       >
-                        <td className="px-3 py-2 text-center font-mono text-zinc-500 align-top">
-                          {idx + 1}
-                        </td>
-                        <td className="px-3 py-2 align-top">
-                          <div
-                            className={`font-bold ${
-                              isMarkedCancelled
-                                ? 'line-through text-rose-700'
-                                : 'text-zinc-950'
-                            }`}
-                          >
-                            {line.description}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-mono text-[10px] font-bold text-zinc-500">
+                                Line #{idx + 1}
+                              </span>
+                              {isAddedInReview && (
+                                <span className="px-1.5 py-0.5 rounded bg-amber-200 text-zinc-950 text-[9px] font-black uppercase">
+                                  Added in Review
+                                </span>
+                              )}
+                            </div>
+                            <div
+                              className={`font-bold text-sm break-words ${
+                                isMarkedCancelled ? 'line-through text-rose-700' : 'text-zinc-950'
+                              }`}
+                            >
+                              {line.description}
+                            </div>
+                            <div className="text-[10px] font-mono text-zinc-500">
+                              {line.category}
+                              {line.batchNo ? ` · Batch: ${line.batchNo}` : ''}
+                            </div>
                           </div>
-                          <div className="text-[10px] font-mono text-zinc-500">
-                            {line.category}
-                            {line.batchNo ? ` · Batch: ${line.batchNo}` : ''}
+                          {isAddedInReview && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveAddedReviewLine(lineKey)}
+                              title="Remove added item"
+                              className="p-1 rounded text-zinc-400 hover:text-rose-600 cursor-pointer shrink-0"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Editable Qty Stepper */}
+                        <div className="flex items-center justify-between gap-2 bg-zinc-50 border border-zinc-200 rounded-lg px-2.5 py-1.5">
+                          <div className="text-[10px] font-black uppercase text-zinc-600">
+                            Req Qty ({line.uom})
+                            {typeof origQty === 'number' && origQty !== line.quantity && (
+                              <span className="ml-1 text-amber-700">(Orig: {origQty})</span>
+                            )}
                           </div>
-                          {isMarkedCancelled && (
-                            <input
-                              type="text"
-                              value={reviewCancelReasons[lineKey] || ''}
-                              onChange={(e) =>
-                                setReviewCancelReasons((prev) => ({
-                                  ...prev,
-                                  [lineKey]: e.target.value,
-                                }))
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={isMarkedCancelled || line.quantity <= 1}
+                              onClick={() =>
+                                handleUpdateReviewLineQty(lineKey, (Number(line.quantity) || 1) - 1)
                               }
-                              placeholder="Reason (default: Not available in inventory)"
-                              className="mt-1.5 w-full px-2 py-1 rounded border border-rose-300 bg-white text-[11px] text-rose-900 placeholder:text-rose-300 focus:outline-none focus:ring-1 focus:ring-rose-400"
+                              className="w-6 h-6 rounded border border-zinc-300 bg-white font-black text-zinc-800 hover:bg-zinc-100 disabled:opacity-40 cursor-pointer"
+                            >
+                              -
+                            </button>
+                            <input
+                              type="number"
+                              min={1}
+                              step="1"
+                              disabled={isMarkedCancelled}
+                              value={line.quantity}
+                              onChange={(e) =>
+                                handleUpdateReviewLineQty(lineKey, Number(e.target.value))
+                              }
+                              className="w-16 px-1.5 py-1 rounded border border-zinc-300 bg-white font-mono text-xs font-black text-center tabular-nums disabled:bg-zinc-100 disabled:text-zinc-400"
                             />
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-right font-mono font-black tabular-nums whitespace-nowrap align-top">
-                          {line.quantity} {line.uom}
-                        </td>
-                        <td className="px-3 py-2 align-top whitespace-nowrap">
-                          {!stockInfo.isFromMonitored ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200 text-[10px] font-bold">
-                              {stockInfo.statusLabel}
-                            </span>
-                          ) : stockInfo.isUnavailable ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-300 text-[10px] font-black">
-                              <AlertTriangle className="w-3 h-3" />
-                              {stockInfo.statusLabel}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold">
-                              <CheckCircle2 className="w-3 h-3" />
-                              {stockInfo.statusLabel}
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-center align-top whitespace-nowrap">
+                            <button
+                              type="button"
+                              disabled={isMarkedCancelled}
+                              onClick={() =>
+                                handleUpdateReviewLineQty(lineKey, (Number(line.quantity) || 0) + 1)
+                              }
+                              className="w-6 h-6 rounded border border-zinc-300 bg-white font-black text-zinc-800 hover:bg-zinc-100 disabled:opacity-40 cursor-pointer"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            {!stockInfo.isFromMonitored ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200 text-[10px] font-bold">
+                                {stockInfo.statusLabel}
+                              </span>
+                            ) : stockInfo.isUnavailable ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-300 text-[10px] font-black">
+                                <AlertTriangle className="w-3 h-3" />
+                                {stockInfo.statusLabel}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold">
+                                <CheckCircle2 className="w-3 h-3" />
+                                {stockInfo.statusLabel}
+                              </span>
+                            )}
+                          </div>
+
                           <div className="inline-flex rounded-lg overflow-hidden border border-zinc-300">
                             <button
                               type="button"
                               onClick={() => {
                                 if (isMarkedCancelled) handleToggleReviewCancelItem(lineKey);
                               }}
-                              className={`px-2 py-1 text-[10px] font-black uppercase cursor-pointer transition-colors ${
+                              className={`px-2.5 py-1 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer transition-colors ${
                                 !isMarkedCancelled
                                   ? 'bg-emerald-600 text-white'
                                   : 'bg-white text-zinc-600 hover:bg-zinc-100'
@@ -6545,7 +6666,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               onClick={() => {
                                 if (!isMarkedCancelled) handleToggleReviewCancelItem(lineKey);
                               }}
-                              className={`px-2 py-1 text-[10px] font-black uppercase cursor-pointer transition-colors ${
+                              className={`px-2.5 py-1 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer transition-colors ${
                                 isMarkedCancelled
                                   ? 'bg-rose-600 text-white'
                                   : 'bg-white text-zinc-600 hover:bg-rose-50'
@@ -6554,50 +6675,248 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               Cancel Item
                             </button>
                           </div>
-                        </td>
-                      </tr>
+                        </div>
+
+                        {isMarkedCancelled && (
+                          <input
+                            type="text"
+                            value={reviewCancelReasons[lineKey] || ''}
+                            onChange={(e) =>
+                              setReviewCancelReasons((prev) => ({
+                                ...prev,
+                                [lineKey]: e.target.value,
+                              }))
+                            }
+                            placeholder="Reason (default: Not available in inventory)"
+                            className="w-full px-2.5 py-1.5 rounded border border-rose-300 bg-white text-[11px] text-rose-900 placeholder:text-rose-300 focus:outline-none focus:ring-1 focus:ring-rose-400"
+                          />
+                        )}
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
-            </div>
+                </div>
 
-            <div className="px-4 py-3 border-t border-zinc-200 bg-zinc-50 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex flex-wrap items-center gap-2 font-mono font-bold text-[11px]">
-                <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
-                  Approved: {Math.max(0, (reviewingTransfer.items || []).length - reviewCancelledIds.size)}
-                </span>
-                <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200">
-                  Cancelled: {reviewCancelledIds.size}
-                </span>
-                {reviewCancelledIds.size === (reviewingTransfer.items || []).length && (
-                  <span className="text-rose-700 font-sans font-bold">
-                    All items cancelled — STR will be marked CANCELLED and reserved stock returned.
-                  </span>
-                )}
+                {/* Desktop Review STR Items Table */}
+                <table className="hidden md:table w-full text-left border-collapse text-xs">
+                  <thead className="sticky top-0 bg-zinc-100 text-zinc-700 uppercase text-[10px] font-black border-b border-zinc-200">
+                    <tr>
+                      <th className="px-3 py-2 w-10 text-center">#</th>
+                      <th className="px-3 py-2">Requested Item</th>
+                      <th className="px-3 py-2 text-right w-40">Req Qty</th>
+                      <th className="px-3 py-2">Inventory Check ({reviewingTransfer.fromBranchCode})</th>
+                      <th className="px-3 py-2 text-center">Decision</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200">
+                    {reviewDraftItems.map((line, idx) => {
+                      const lineKey = getLineKey(line, idx);
+                      const isMarkedCancelled = reviewCancelledIds.has(lineKey);
+                      const isAddedInReview = reviewAddedLineIds.has(lineKey);
+                      const origQty = (reviewingTransfer.items || []).find(
+                        (orig, i) => getLineKey(orig, i) === lineKey
+                      )?.quantity;
+                      const stockInfo = getReviewLineStockInfo(reviewingTransfer, line);
+                      return (
+                        <tr
+                          key={lineKey}
+                          className={
+                            isMarkedCancelled
+                              ? 'bg-rose-50/70'
+                              : stockInfo.isUnavailable
+                              ? 'bg-amber-50/50'
+                              : 'hover:bg-zinc-50'
+                          }
+                        >
+                          <td className="px-3 py-2 text-center font-mono text-zinc-500 align-top">
+                            {idx + 1}
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`font-bold ${
+                                  isMarkedCancelled
+                                    ? 'line-through text-rose-700'
+                                    : 'text-zinc-950'
+                                }`}
+                              >
+                                {line.description}
+                              </span>
+                              {isAddedInReview && (
+                                <span className="px-1.5 py-0.5 rounded bg-amber-200 text-zinc-950 text-[9px] font-black uppercase">
+                                  Added
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] font-mono text-zinc-500">
+                              {line.category}
+                              {line.batchNo ? ` · Batch: ${line.batchNo}` : ''}
+                            </div>
+                            {isMarkedCancelled && (
+                              <input
+                                type="text"
+                                value={reviewCancelReasons[lineKey] || ''}
+                                onChange={(e) =>
+                                  setReviewCancelReasons((prev) => ({
+                                    ...prev,
+                                    [lineKey]: e.target.value,
+                                  }))
+                                }
+                                placeholder="Reason (default: Not available in inventory)"
+                                className="mt-1.5 w-full px-2 py-1 rounded border border-rose-300 bg-white text-[11px] text-rose-900 placeholder:text-rose-300 focus:outline-none focus:ring-1 focus:ring-rose-400"
+                              />
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right align-top whitespace-nowrap">
+                            <div className="inline-flex items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                disabled={isMarkedCancelled || line.quantity <= 1}
+                                onClick={() =>
+                                  handleUpdateReviewLineQty(lineKey, (Number(line.quantity) || 1) - 1)
+                                }
+                                className="w-6 h-6 rounded border border-zinc-300 bg-white font-black text-zinc-800 hover:bg-zinc-100 disabled:opacity-40 cursor-pointer"
+                              >
+                                -
+                              </button>
+                              <input
+                                type="number"
+                                min={1}
+                                step="1"
+                                disabled={isMarkedCancelled}
+                                value={line.quantity}
+                                onChange={(e) =>
+                                  handleUpdateReviewLineQty(lineKey, Number(e.target.value))
+                                }
+                                className="w-16 px-1.5 py-1 rounded border border-zinc-300 bg-white font-mono text-xs font-black text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-amber-400 disabled:bg-zinc-100 disabled:text-zinc-400"
+                              />
+                              <button
+                                type="button"
+                                disabled={isMarkedCancelled}
+                                onClick={() =>
+                                  handleUpdateReviewLineQty(lineKey, (Number(line.quantity) || 0) + 1)
+                                }
+                                className="w-6 h-6 rounded border border-zinc-300 bg-white font-black text-zinc-800 hover:bg-zinc-100 disabled:opacity-40 cursor-pointer"
+                              >
+                                +
+                              </button>
+                              <span className="text-[11px] font-semibold text-zinc-600 ml-0.5">
+                                {line.uom}
+                              </span>
+                            </div>
+                            {typeof origQty === 'number' && origQty !== line.quantity && (
+                              <div className="text-[10px] font-mono text-amber-700 mt-0.5">
+                                Orig: {origQty} {line.uom}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 align-top whitespace-nowrap">
+                            {!stockInfo.isFromMonitored ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200 text-[10px] font-bold">
+                                {stockInfo.statusLabel}
+                              </span>
+                            ) : stockInfo.isUnavailable ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-300 text-[10px] font-black">
+                                <AlertTriangle className="w-3 h-3" />
+                                {stockInfo.statusLabel}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold">
+                                <CheckCircle2 className="w-3 h-3" />
+                                {stockInfo.statusLabel}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-center align-top whitespace-nowrap">
+                            <div className="inline-flex items-center gap-1">
+                              <div className="inline-flex rounded-lg overflow-hidden border border-zinc-300">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isMarkedCancelled) handleToggleReviewCancelItem(lineKey);
+                                  }}
+                                  className={`px-2 py-1 text-[10px] font-black uppercase cursor-pointer transition-colors ${
+                                    !isMarkedCancelled
+                                      ? 'bg-emerald-600 text-white'
+                                      : 'bg-white text-zinc-600 hover:bg-zinc-100'
+                                  }`}
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!isMarkedCancelled) handleToggleReviewCancelItem(lineKey);
+                                  }}
+                                  className={`px-2 py-1 text-[10px] font-black uppercase cursor-pointer transition-colors ${
+                                    isMarkedCancelled
+                                      ? 'bg-rose-600 text-white'
+                                      : 'bg-white text-zinc-600 hover:bg-rose-50'
+                                  }`}
+                                >
+                                  Cancel Item
+                                </button>
+                              </div>
+                              {isAddedInReview && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveAddedReviewLine(lineKey)}
+                                  title="Remove added item"
+                                  className="p-1 rounded text-zinc-400 hover:text-rose-600 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setReviewingTransfer(null)}
-                  className="px-3.5 py-1.5 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-800 font-bold uppercase cursor-pointer"
-                >
-                  Close
-                </button>
-                <button
-                  type="button"
-                  disabled={isSavingReview}
-                  onClick={handleSubmitReviewStrModal}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 font-black uppercase cursor-pointer disabled:opacity-50"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  {isSavingReview ? 'Saving...' : 'Confirm Review'}
-                </button>
+
+              <div className="px-4 py-3 border-t border-zinc-200 bg-zinc-50 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2 font-mono font-bold text-[11px]">
+                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    Approved: {Math.max(0, reviewDraftItems.length - reviewCancelledIds.size)}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200">
+                    Cancelled: {reviewCancelledIds.size}
+                  </span>
+                  {reviewAddedLineIds.size > 0 && (
+                    <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">
+                      Added: {reviewAddedLineIds.size}
+                    </span>
+                  )}
+                  {reviewCancelledIds.size === reviewDraftItems.length && (
+                    <span className="text-rose-700 font-sans font-bold">
+                      All items cancelled — STR will be marked CANCELLED and reserved stock returned.
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setReviewingTransfer(null)}
+                    className="px-3.5 py-1.5 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-800 font-bold uppercase cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSavingReview}
+                    onClick={handleSubmitReviewStrModal}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 font-black uppercase cursor-pointer disabled:opacity-50"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    {isSavingReview ? 'Saving...' : 'Confirm Review'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* 1/4 Letter Printable STR Modal */}
       <PrintableStrModal
