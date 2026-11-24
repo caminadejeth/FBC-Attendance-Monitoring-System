@@ -314,9 +314,58 @@
         "updatedBy": { "type": "string" }
       },
       "required": ["id", "recipientEmail", "enabled", "updatedAt"]
+    },
+    "activityLogs": {
+      "title": "ActivityLog",
+      "description": "Audit trail of system actions and data changes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "actionType": { "type": "string" },
+        "actionCategory": { "type": "string" },
+        "details": { "type": "string" },
+        "targetId": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "userName", "actionType", "details"]
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/users" },
+      "description": "System user accounts and employee directory"
+    },
+    "/summaries/{summaryId}": {
+      "schema": { "$ref": "#/entities/summaries" },
+      "description": "Daily attendance summary records"
+    },
+    "/punches/{punchId}": {
+      "schema": { "$ref": "#/entities/punches" },
+      "description": "Raw biometric punch records"
+    },
+    "/disputes/{disputeId}": {
+      "schema": { "$ref": "#/entities/disputes" },
+      "description": "Employee time adjustment and punch disputes"
+    },
+    "/schedules/{scheduleId}": {
+      "schema": { "$ref": "#/entities/schedules" },
+      "description": "Employee work schedule rosters"
+    },
+    "/ctoRequests/{ctoRequestId}": {
+      "schema": { "$ref": "#/entities/ctoRequests" },
+      "description": "CTO earn and leave requests"
+    },
+    "/ctoAdjustments/{adjustmentId}": {
+      "schema": { "$ref": "#/entities/ctoAdjustments" },
+      "description": "Manual CTO balance adjustments"
+    },
+    "/activityLogs/{logId}": {
+      "schema": { "$ref": "#/entities/activityLogs" },
+      "description": "Admin activity audit log entries"
+    },
     "/warehouseCategories/{categoryId}": {
       "schema": { "$ref": "#/entities/warehouseCategories" },
       "description": "Warehouse inventory categories"

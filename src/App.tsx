@@ -89,7 +89,10 @@ import {
   safeLocalStorageSet,
   safeCacheCollectionItems,
   subscribeFirestoreQuotaStatus,
+  getDateCutoffYYYYMMDD,
+  getDateCutoffISO,
 } from './lib/firestoreSync';
+import { where } from './lib/firebase';
 
 const loadFromStorage = <T,>(key: string, fallback: T): T => {
   try {
@@ -165,6 +168,7 @@ export default function App() {
       defaultRecipient: DEFAULT_ADMIN_ALERT_EMAIL,
     });
   const [firestoreQuotaExceeded, setFirestoreQuotaExceeded] = useState(false);
+  const [historyScope, setHistoryScope] = useState<'RECENT' | 'ALL'>('RECENT');
 
   // Check server-side email transport readiness on mount
   useEffect(() => {
@@ -176,19 +180,50 @@ export default function App() {
     return subscribeFirestoreQuotaStatus(setFirestoreQuotaExceeded);
   }, []);
 
-  // Real-Time Firebase Firestore Cloud Database Subscriptions across all devices/users
+  // Always subscribe to users so LoginScreen authentication works cleanly
   useEffect(() => {
     const unsubUsers = subscribeCollection('users', INITIAL_USERS, setUsers);
-    const unsubSummaries = subscribeCollection('summaries', INITIAL_DAILY_SUMMARIES, setSummaries);
-    const unsubPunches = subscribeCollection('punches', INITIAL_PUNCHES, setPunches);
+    return () => {
+      unsubUsers();
+    };
+  }, []);
+
+  // Role-Gated & Date-Windowed Firestore Cloud Subscriptions (active only after sign-in)
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+
+    const role = currentUser.role;
+    const isAdmin = role === 'ADMIN';
+    const needsPunches = role === 'ADMIN' || role === 'BRANCH_MANAGER' || role === 'PAYROLL';
+    const isRecentWindow = historyScope === 'RECENT';
+    const cutoff90Days = getDateCutoffYYYYMMDD(90);
+    const cutoff60DaysIso = getDateCutoffISO(60);
+    const cutoff30DaysIso = getDateCutoffISO(30);
+
+    const unsubSummaries = subscribeCollection(
+      'summaries',
+      INITIAL_DAILY_SUMMARIES,
+      setSummaries,
+      isRecentWindow
+        ? { constraints: [where('date', '>=', cutoff90Days)], idbKey: 'summaries_recent_90d', skipSeedOnEmpty: true }
+        : undefined
+    );
     const unsubDisputes = subscribeCollection('disputes', INITIAL_DISPUTES, setDisputes);
     const unsubSchedules = subscribeCollection('schedules', INITIAL_SCHEDULES, setSchedules);
     const unsubCtoReq = subscribeCollection('ctoRequests', INITIAL_CTO_REQUESTS, setCtoRequests);
     const unsubCtoAdj = subscribeCollection('ctoAdjustments', INITIAL_CTO_ADJUSTMENTS, setCtoAdjustments);
-    const unsubActivity = subscribeCollection('activityLogs', INITIAL_ACTIVITY_LOGS, setActivityLogs);
     const unsubWarehouseCats = subscribeCollection<WarehouseCategory>('warehouseCategories', [], setWarehouseCategories);
     const unsubWarehouseItems = subscribeCollection<WarehouseInventoryItem>('warehouseItems', [], setWarehouseItems);
-    const unsubStockMovements = subscribeCollection<StockMovementEntry>('stockMovements', [], setStockMovements);
+    const unsubStockMovements = subscribeCollection<StockMovementEntry>(
+      'stockMovements',
+      [],
+      setStockMovements,
+      isRecentWindow
+        ? { constraints: [where('date', '>=', cutoff90Days)], idbKey: 'stockMovements_recent_90d', skipSeedOnEmpty: true }
+        : undefined
+    );
     const unsubStockTransfers = subscribeCollection<StockTransferRequisition>('stockTransfers', [], setStockTransfers);
     const unsubStoreTickets = subscribeCollection<StoreTicket>('storeTickets', [], setStoreTickets);
     const unsubEmailSettings = subscribeCollection<AdminEmailNotificationConfig>(
@@ -199,27 +234,53 @@ export default function App() {
     const unsubEmailedAlerts = subscribeCollection<EmailedAdminAlertRecord>(
       'emailedAlerts',
       [],
-      setEmailedAlerts
+      setEmailedAlerts,
+      isRecentWindow
+        ? { constraints: [where('sentAt', '>=', cutoff30DaysIso)], idbKey: 'emailedAlerts_recent_30d', skipSeedOnEmpty: true }
+        : undefined
     );
 
-    // One-time default warehouse catalog & categories seed to Firestore if not yet initialized
-    (async () => {
-      try {
-        const alreadySeeded = await isWarehouseCatalogSeeded();
-        if (!alreadySeeded) {
-          const defaultCats = buildDefaultWarehouseCategories('System Default');
-          const defaultItems = buildDefaultCatalogItemsForBranch('YC-EBLC', 'System Default', true);
-          await saveDocuments('warehouseCategories', defaultCats);
-          await saveDocuments('warehouseItems', defaultItems);
-          await markWarehouseCatalogSeeded();
+    const unsubPunches = needsPunches
+      ? subscribeCollection(
+          'punches',
+          INITIAL_PUNCHES,
+          setPunches,
+          isRecentWindow
+            ? { constraints: [where('timestamp', '>=', cutoff90Days)], idbKey: 'punches_recent_90d', skipSeedOnEmpty: true }
+            : undefined
+        )
+      : () => {};
+
+    const unsubActivity = isAdmin
+      ? subscribeCollection(
+          'activityLogs',
+          INITIAL_ACTIVITY_LOGS,
+          setActivityLogs,
+          isRecentWindow
+            ? { constraints: [where('timestamp', '>=', cutoff60DaysIso)], idbKey: 'activityLogs_recent_60d', skipSeedOnEmpty: true }
+            : undefined
+        )
+      : () => {};
+
+    // One-time default warehouse catalog & categories seed to Firestore (Admin session only)
+    if (isAdmin) {
+      (async () => {
+        try {
+          const alreadySeeded = await isWarehouseCatalogSeeded();
+          if (!alreadySeeded) {
+            const defaultCats = buildDefaultWarehouseCategories('System Default');
+            const defaultItems = buildDefaultCatalogItemsForBranch('YC-EBLC', 'System Default', true);
+            await saveDocuments('warehouseCategories', defaultCats);
+            await saveDocuments('warehouseItems', defaultItems);
+            await markWarehouseCatalogSeeded();
+          }
+        } catch (err) {
+          console.error('Failed one-time warehouse default catalog seed:', err);
         }
-      } catch (err) {
-        console.error('Failed one-time warehouse default catalog seed:', err);
-      }
-    })();
+      })();
+    }
 
     return () => {
-      unsubUsers();
       unsubSummaries();
       unsubPunches();
       unsubDisputes();
@@ -235,7 +296,7 @@ export default function App() {
       unsubEmailSettings();
       unsubEmailedAlerts();
     };
-  }, []);
+  }, [currentUser?.id, currentUser?.role, historyScope]);
 
   // System Activity Logger Helper
   const logActivity = (
@@ -577,14 +638,15 @@ export default function App() {
   }, [emailedAlerts]);
 
   useEffect(() => {
+    alertsArmedRef.current = false;
+    alertBaselineIdsRef.current = null;
+    if (!currentUser) return;
     const timer = setTimeout(() => {
-      if (!alertBaselineIdsRef.current) {
-        alertBaselineIdsRef.current = new Set(allAdminAlerts.map((a) => a.id));
-      }
+      alertBaselineIdsRef.current = new Set(allAdminAlerts.map((a) => a.id));
       alertsArmedRef.current = true;
     }, 2500);
     return () => clearTimeout(timer);
-  }, []);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     if (!alertsArmedRef.current) {
@@ -3334,6 +3396,34 @@ export default function App() {
                 >
                   Open Firebase Quota / Upgrade
                 </a>
+              </div>
+            )}
+
+            {(currentUser.role === 'ADMIN' ||
+              currentUser.role === 'PAYROLL' ||
+              currentUser.role === 'BRANCH_MANAGER' ||
+              activeTab === 'warehouse-inventory') && (
+              <div className="mb-4 rounded-xl border border-zinc-200 bg-white px-3.5 py-2 text-xs text-zinc-700 flex flex-wrap items-center justify-between gap-2 print:hidden no-print">
+                <span>
+                  {historyScope === 'RECENT' ? (
+                    <>
+                      Date Window: <strong className="text-zinc-950">Last 90 Days</strong> (Attendance, Stock Movements &amp; Logs)
+                    </>
+                  ) : (
+                    <>
+                      Date Window: <strong className="text-zinc-950">All-Time Archive</strong>
+                    </>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setHistoryScope((prev) => (prev === 'RECENT' ? 'ALL' : 'RECENT'))
+                  }
+                  className="px-2.5 py-1 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-amber-400 text-[11px] font-black uppercase tracking-wider cursor-pointer transition-colors"
+                >
+                  {historyScope === 'RECENT' ? 'Load All-Time Archive' : 'Use 90-Day Window'}
+                </button>
               </div>
             )}
 

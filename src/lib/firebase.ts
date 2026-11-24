@@ -13,7 +13,12 @@ import {
   setDoc,
   deleteDoc,
   writeBatch,
+  query,
+  where,
+  orderBy,
+  limit,
   type Firestore,
+  type QueryConstraint,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -39,6 +44,20 @@ function createFirestoreInstance(): Firestore {
 
 export const db = createFirestoreInstance();
 
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+
+if (typeof window !== 'undefined') {
+  void testConnection();
+}
+
 export {
   collection,
   onSnapshot,
@@ -48,4 +67,9 @@ export {
   setDoc,
   deleteDoc,
   writeBatch,
+  query,
+  where,
+  orderBy,
+  limit,
+  type QueryConstraint,
 };

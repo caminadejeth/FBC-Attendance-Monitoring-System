@@ -1,8 +1,150 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Global default-deny for any unlisted collection or subcollection
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
+    }
+
+    function isValidId(docId) {
+      return docId is string && docId.size() >= 1 && docId.size() <= 200;
+    }
+
+    function isValidPayload() {
+      return request.resource.data is map
+        && request.resource.data.keys().size() >= 1
+        && request.resource.data.keys().size() <= 60;
+    }
+
+    function hasValidDocIdField(docId) {
+      return request.resource.data.id is string
+        && request.resource.data.id == docId;
+    }
+
+    // Connection health check (read-only)
+    match /test/connection {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
+    // Initialization metadata flags
+    match /_metadata/{metaId} {
+      allow get: if isValidId(metaId);
+      allow list: if false;
+      allow create, update: if isValidId(metaId) && isValidPayload();
+      allow delete: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId);
+      allow list: if true;
+      allow create, update: if isValidId(userId) && isValidPayload() && hasValidDocIdField(userId);
+      allow delete: if isValidId(userId);
+    }
+
+    match /summaries/{summaryId} {
+      allow get: if isValidId(summaryId);
+      allow list: if true;
+      allow create, update: if isValidId(summaryId) && isValidPayload() && hasValidDocIdField(summaryId);
+      allow delete: if isValidId(summaryId);
+    }
+
+    match /punches/{punchId} {
+      allow get: if isValidId(punchId);
+      allow list: if true;
+      allow create, update: if isValidId(punchId) && isValidPayload() && hasValidDocIdField(punchId);
+      allow delete: if isValidId(punchId);
+    }
+
+    match /disputes/{disputeId} {
+      allow get: if isValidId(disputeId);
+      allow list: if true;
+      allow create, update: if isValidId(disputeId) && isValidPayload() && hasValidDocIdField(disputeId);
+      allow delete: if isValidId(disputeId);
+    }
+
+    match /schedules/{scheduleId} {
+      allow get: if isValidId(scheduleId);
+      allow list: if true;
+      allow create, update: if isValidId(scheduleId) && isValidPayload() && hasValidDocIdField(scheduleId);
+      allow delete: if isValidId(scheduleId);
+    }
+
+    match /ctoRequests/{ctoRequestId} {
+      allow get: if isValidId(ctoRequestId);
+      allow list: if true;
+      allow create, update: if isValidId(ctoRequestId) && isValidPayload() && hasValidDocIdField(ctoRequestId);
+      allow delete: if isValidId(ctoRequestId);
+    }
+
+    match /ctoAdjustments/{adjustmentId} {
+      allow get: if isValidId(adjustmentId);
+      allow list: if true;
+      allow create, update: if isValidId(adjustmentId) && isValidPayload() && hasValidDocIdField(adjustmentId);
+      allow delete: if isValidId(adjustmentId);
+    }
+
+    match /activityLogs/{logId} {
+      allow get: if isValidId(logId);
+      allow list: if true;
+      allow create, update: if isValidId(logId) && isValidPayload() && hasValidDocIdField(logId);
+      allow delete: if isValidId(logId);
+    }
+
+    match /warehouseCategories/{categoryId} {
+      allow get: if isValidId(categoryId);
+      allow list: if true;
+      allow create, update: if isValidId(categoryId) && isValidPayload() && hasValidDocIdField(categoryId);
+      allow delete: if isValidId(categoryId);
+    }
+
+    match /warehouseItems/{itemId} {
+      allow get: if isValidId(itemId);
+      allow list: if true;
+      allow create, update: if isValidId(itemId) && isValidPayload() && hasValidDocIdField(itemId);
+      allow delete: if isValidId(itemId);
+    }
+
+    match /stockMovements/{movementId} {
+      allow get: if isValidId(movementId);
+      allow list: if true;
+      allow create, update: if isValidId(movementId) && isValidPayload() && hasValidDocIdField(movementId);
+      allow delete: if isValidId(movementId);
+    }
+
+    match /stockTransfers/{transferId} {
+      allow get: if isValidId(transferId);
+      allow list: if true;
+      allow create, update: if isValidId(transferId) && isValidPayload() && hasValidDocIdField(transferId);
+      allow delete: if isValidId(transferId);
+    }
+
+    match /storeTickets/{ticketId} {
+      allow get: if isValidId(ticketId);
+      allow list: if true;
+      allow create, update: if isValidId(ticketId) && isValidPayload() && hasValidDocIdField(ticketId);
+      allow delete: if isValidId(ticketId);
+    }
+
+    match /adminNotificationSettings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow create, update: if isValidId(settingId) && isValidPayload() && hasValidDocIdField(settingId);
+      allow delete: if isValidId(settingId);
+    }
+
+    match /emailedAlerts/{alertDocId} {
+      allow get: if isValidId(alertDocId);
+      allow list: if true;
+      allow create, update: if isValidId(alertDocId) && isValidPayload() && hasValidDocIdField(alertDocId);
+      allow delete: if isValidId(alertDocId);
+    }
+
+    match /adminEmailSettings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow create, update: if isValidId(settingId) && isValidPayload() && hasValidDocIdField(settingId);
+      allow delete: if isValidId(settingId);
     }
   }
 }

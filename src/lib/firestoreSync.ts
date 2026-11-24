@@ -1,5 +1,38 @@
-import { db, collection, onSnapshot, doc, getDoc, setDoc, deleteDoc, writeBatch } from './firebase';
+import {
+  db,
+  collection,
+  onSnapshot,
+  doc,
+  getDoc,
+  setDoc,
+  deleteDoc,
+  writeBatch,
+  query,
+  type QueryConstraint,
+} from './firebase';
 import { idbGetCollection, idbSetCollection } from './indexedDbCache';
+import {
+  OperationType,
+  handleFirestoreError,
+  isPermissionDeniedError,
+  isQuotaExceededError,
+  logFirestoreError,
+} from '../utils/firestoreErrorHandler';
+
+export interface SubscribeCollectionOptions {
+  constraints?: QueryConstraint[];
+  skipSeedOnEmpty?: boolean;
+  idbKey?: string;
+}
+
+export function getDateCutoffYYYYMMDD(daysAgo: number): string {
+  const d = new Date(Date.now() - daysAgo * 86_400_000);
+  return d.toISOString().slice(0, 10);
+}
+
+export function getDateCutoffISO(daysAgo: number): string {
+  return new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+}
 
 const getStorageKey = (colName: string) => {
   if (colName === 'ctoRequests') return 'fbc_cto_requests';
@@ -327,9 +360,15 @@ export function unmarkDeletedIds(colName: string, ids: string[]) {
 export function subscribeCollection<T extends { id: string }>(
   collectionName: string,
   initialData: T[],
-  onUpdate: (data: T[]) => void
+  onUpdate: (data: T[]) => void,
+  options?: SubscribeCollectionOptions
 ) {
   const colRef = collection(db, collectionName);
+  const hasQueryConstraints = Boolean(options?.constraints && options.constraints.length > 0);
+  const skipSeedOnEmpty = options?.skipSeedOnEmpty ?? hasQueryConstraints;
+  const idbCacheKey = options?.idbKey || collectionName;
+  const targetRef = hasQueryConstraints ? query(colRef, ...options!.constraints!) : colRef;
+
   const storageKey = getStorageKey(collectionName);
   const seededKey = `fbc_seeded_${collectionName}`;
 
@@ -338,7 +377,7 @@ export function subscribeCollection<T extends { id: string }>(
   let hydratedFromIdb = false;
 
   // Immediately hydrate from persistent IndexedDB cache while waiting for Firestore
-  void idbGetCollection<T>(collectionName).then((cachedItems) => {
+  void idbGetCollection<T>(idbCacheKey).then((cachedItems) => {
     if (cancelled || receivedLiveCloudSnapshot || !cachedItems || cachedItems.length === 0) {
       return;
     }
@@ -351,11 +390,21 @@ export function subscribeCollection<T extends { id: string }>(
   });
 
   const unsubSnapshot = onSnapshot(
-    colRef,
+    targetRef,
     async (snapshot) => {
       const deletedSet = getDeletedIds(collectionName);
 
       if (snapshot.empty) {
+        if (skipSeedOnEmpty) {
+          if (snapshot.metadata.fromCache && hydratedFromIdb) {
+            return;
+          }
+          receivedLiveCloudSnapshot = true;
+          void idbSetCollection(idbCacheKey, []);
+          onUpdate([]);
+          return;
+        }
+
         let isSeededLocally: string | null = null;
         try {
           isSeededLocally = localStorage.getItem(seededKey);
@@ -443,23 +492,31 @@ export function subscribeCollection<T extends { id: string }>(
 
         const sortedItems = sortItemsByCollection(collectionName, items);
 
-        safeCacheCollectionItems(collectionName, sortedItems);
+        if (hasQueryConstraints) {
+          void idbSetCollection(idbCacheKey, sortedItems);
+        } else {
+          safeCacheCollectionItems(collectionName, sortedItems);
+        }
         onUpdate(sortedItems);
       }
     },
-    async (error: any) => {
-      console.error(`Firestore error on ${collectionName}:`, error);
-      const errMsg = String(error?.message || error || '');
-      if (error?.code === 'resource-exhausted' || /quota/i.test(errMsg)) {
+    async (error: unknown) => {
+      logFirestoreError(error, OperationType.GET, collectionName);
+      if (isQuotaExceededError(error)) {
         notifyFirestoreQuotaStatus(true);
       }
 
       const deletedSet = getDeletedIds(collectionName);
       // 1. Prefer persistent IndexedDB backup so large/image-rich collections stay intact
-      const idbCached = await idbGetCollection<T>(collectionName);
+      const idbCached =
+        (await idbGetCollection<T>(idbCacheKey)) ||
+        (idbCacheKey !== collectionName ? await idbGetCollection<T>(collectionName) : null);
       if (idbCached && idbCached.length > 0) {
         const filtered = idbCached.filter((item) => !deletedSet.has(item.id));
         onUpdate(sortItemsByCollection(collectionName, filtered));
+        if (isPermissionDeniedError(error)) {
+          handleFirestoreError(error, OperationType.GET, collectionName);
+        }
         return;
       }
 
@@ -477,6 +534,9 @@ export function subscribeCollection<T extends { id: string }>(
             const filtered = parsed.filter((item) => !deletedSet.has(item.id));
             const sorted = sortItemsByCollection(collectionName, filtered);
             onUpdate(sorted);
+            if (isPermissionDeniedError(error)) {
+              handleFirestoreError(error, OperationType.GET, collectionName);
+            }
             return;
           }
         } catch (e) {
@@ -489,6 +549,10 @@ export function subscribeCollection<T extends { id: string }>(
         const validInitial = initialData.filter((item) => !deletedSet.has(item.id));
         const sortedInitial = sortItemsByCollection(collectionName, validInitial);
         onUpdate(sortedInitial);
+      }
+
+      if (isPermissionDeniedError(error)) {
+        handleFirestoreError(error, OperationType.GET, collectionName);
       }
     }
   );
@@ -532,7 +596,13 @@ export async function saveDocument<T extends { id: string }>(
     await setDoc(doc(db, collectionName, item.id), cleanedItem, { merge: true });
     return true;
   } catch (error) {
-    console.error(`Error saving to ${collectionName}:`, error);
+    logFirestoreError(error, OperationType.WRITE, `${collectionName}/${item.id}`);
+    if (isQuotaExceededError(error)) {
+      notifyFirestoreQuotaStatus(true);
+    }
+    if (isPermissionDeniedError(error)) {
+      handleFirestoreError(error, OperationType.WRITE, `${collectionName}/${item.id}`);
+    }
     return false;
   }
 }
@@ -559,7 +629,13 @@ export async function saveDocuments<T extends { id: string }>(
       }
       await batch.commit();
     } catch (e) {
-      console.error(`Error in batch saving to ${collectionName}:`, e);
+      logFirestoreError(e, OperationType.WRITE, collectionName);
+      if (isQuotaExceededError(e)) {
+        notifyFirestoreQuotaStatus(true);
+      }
+      if (isPermissionDeniedError(e)) {
+        handleFirestoreError(e, OperationType.WRITE, collectionName);
+      }
       // Fallback to individual setDoc calls if batch fails
       for (const item of chunk) {
         await saveDocument(collectionName, item);
@@ -588,7 +664,13 @@ export async function removeDocument(collectionName: string, id: string) {
   try {
     await deleteDoc(doc(db, collectionName, id));
   } catch (error) {
-    console.error(`Error deleting from ${collectionName}:`, error);
+    logFirestoreError(error, OperationType.DELETE, `${collectionName}/${id}`);
+    if (isQuotaExceededError(error)) {
+      notifyFirestoreQuotaStatus(true);
+    }
+    if (isPermissionDeniedError(error)) {
+      handleFirestoreError(error, OperationType.DELETE, `${collectionName}/${id}`);
+    }
   }
 }
 

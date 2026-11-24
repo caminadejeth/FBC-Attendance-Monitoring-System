@@ -7,8 +7,8 @@ export interface CompressedTicketImage {
 }
 
 const MAX_RAW_FILE_BYTES = 15 * 1024 * 1024; // 15 MB raw upload cap
-const MAX_DIMENSION_PX = 1200;
-const TARGET_MAX_DATAURL_CHARS = 220_000; // ~165 KB binary per image so 3 images stay well under Firestore 1 MiB doc limit
+const MAX_DIMENSION_PX = 900;
+const TARGET_MAX_DATAURL_CHARS = 95_000; // ~70 KB binary per image so multi-photo tickets stay lightweight in Firestore
 
 export function isSafeImageSrc(src?: string): boolean {
   if (!src || typeof src !== 'string') return false;
