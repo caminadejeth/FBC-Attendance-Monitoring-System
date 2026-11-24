@@ -97,6 +97,25 @@ interface WarehouseInventoryDashboardProps {
     date: string;
     notes?: string;
   }) => Promise<void> | void;
+  onBulkStockIn?: (params: {
+    branchCode: WarehouseBranchCode;
+    date: string;
+    refNumber: string;
+    supplierOrSource?: string;
+    notes?: string;
+    lines: Array<{
+      itemId?: string;
+      itemCode?: string;
+      description: string;
+      category: string;
+      batchNo?: string;
+      expiryDate?: string;
+      uom: string;
+      unitPrice: number;
+      quantity: number;
+      reorderLevel?: number;
+    }>;
+  }) => Promise<{ updatedCount: number; createdCount: number; totalQtyAdded: number }>;
   onCreateStockTransfer: (
     transfer: Omit<
       StockTransferRequisition,
@@ -110,6 +129,7 @@ interface WarehouseInventoryDashboardProps {
     reviewedItems?: StockTransferLineItem[]
   ) => Promise<void> | void;
   onMarkStockTransferReceived: (transferId: string) => Promise<void> | void;
+  onDeleteStockTransfer?: (transferId: string) => Promise<void> | void;
   onAddLedgerEntry: (
     entry: Omit<StockMovementEntry, 'id' | 'timestamp'>
   ) => Promise<void> | void;
@@ -118,6 +138,19 @@ interface WarehouseInventoryDashboardProps {
 }
 
 type WarehouseSubTab = 'inventory' | 'str' | 'ledger';
+
+interface BulkStockInLine {
+  id: string;
+  itemId?: string;
+  itemCode: string;
+  description: string;
+  category: string;
+  batchNo: string;
+  expiryDate: string;
+  uom: string;
+  unitPrice: number;
+  quantity: number;
+}
 
 const GOOGLE_SHEET_HEADERS = [
   'Date',
@@ -151,18 +184,17 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   onAutoFillMissingCodes,
   onBulkImportInventoryItems,
   onRecordStockMovement,
+  onBulkStockIn,
   onCreateStockTransfer,
   onReviewStockTransfer,
   onMarkStockTransferReceived,
+  onDeleteStockTransfer,
   onAddLedgerEntry,
   onUpdateLedgerEntry,
   onDeleteLedgerEntry,
 }) => {
   const isSuperAdmin = currentUser.role === 'ADMIN';
-  const canViewLedger =
-    currentUser.role !== 'BRANCH_MANAGER' &&
-    currentUser.role !== 'SHIFT_MANAGER' &&
-    currentUser.role !== 'STAFF';
+  const canViewLedger = true;
   const mappedUserBranch = mapDepartmentToBranchCode(
     currentUser.branch || currentUser.department
   );
@@ -178,12 +210,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   );
 
   const [subTab, setSubTab] = useState<WarehouseSubTab>('inventory');
-
-  useEffect(() => {
-    if (!canViewLedger && subTab === 'ledger') {
-      setSubTab('inventory');
-    }
-  }, [canViewLedger, subTab]);
 
   // Category names list (live from Firestore categories + fallback any used in items)
   const categoryOptions = useMemo(() => {
@@ -279,6 +305,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
   // History, Print, Inline Min & STR/Ledger Modal State
   const [strSearch, setStrSearch] = useState<string>('');
+  const [strStartDate, setStrStartDate] = useState<string>('');
+  const [strEndDate, setStrEndDate] = useState<string>('');
   const [printableTransfer, setPrintableTransfer] =
     useState<StockTransferRequisition | null>(null);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
@@ -304,6 +332,13 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   // Inline Min Level Editing (Super Admin)
   const [editingMinItemId, setEditingMinItemId] = useState<string | null>(null);
   const [editingMinVal, setEditingMinVal] = useState<string>('2');
+
+  // Per-Item Movement History Modal State
+  const [historyTargetItem, setHistoryTargetItem] =
+    useState<WarehouseInventoryItem | null>(null);
+  const [historyBranchScope, setHistoryBranchScope] =
+    useState<'ITEM_BRANCH' | 'ALL_BRANCHES'>('ITEM_BRANCH');
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<string>('ALL');
 
   // Ledger Remarks View & Super Admin Add/Edit Modal State
   const [viewingRemarksEntry, setViewingRemarksEntry] =
@@ -347,6 +382,20 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
   const [importRawRows, setImportRawRows] = useState<Record<string, any>[]>([]);
   const [isImportingStock, setIsImportingStock] = useState<boolean>(false);
 
+  // Super Admin Bulk Stock In (Delivery) Modal State
+  const [showBulkStockInModal, setShowBulkStockInModal] = useState<boolean>(false);
+  const [bulkInBranch, setBulkInBranch] = useState<WarehouseBranchCode>(defaultUserBranch);
+  const [bulkInDate, setBulkInDate] = useState<string>(todayStr);
+  const [bulkInRef, setBulkInRef] = useState<string>('');
+  const [bulkInSource, setBulkInSource] = useState<string>('Supplier Delivery');
+  const [bulkInNotes, setBulkInNotes] = useState<string>('');
+  const [bulkInLines, setBulkInLines] = useState<BulkStockInLine[]>([]);
+  const [isBulkPickerOpen, setIsBulkPickerOpen] = useState<boolean>(false);
+  const [bulkPickerSearch, setBulkPickerSearch] = useState<string>('');
+  const [bulkPickerCategory, setBulkPickerCategory] = useState<string>('ALL');
+  const [bulkPickerSource, setBulkPickerSource] = useState<'BRANCH' | 'CATALOG'>('BRANCH');
+  const [isSubmittingBulkIn, setIsSubmittingBulkIn] = useState<boolean>(false);
+
   const itemModalReferences = useMemo(
     () => getUniqueStockReferences(inventoryItems, itemBranch),
     [inventoryItems, itemBranch]
@@ -356,6 +405,45 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     () => getUniqueStockReferences(inventoryItems, fromBranchCode),
     [inventoryItems, fromBranchCode]
   );
+
+  const bulkInReferences = useMemo(
+    () => getUniqueStockReferences(inventoryItems, bulkInBranch),
+    [inventoryItems, bulkInBranch]
+  );
+
+  const bulkBranchStock = useMemo(() => {
+    return inventoryItems
+      .filter((item) => item.branchCode === bulkInBranch)
+      .sort((a, b) => a.description.localeCompare(b.description));
+  }, [inventoryItems, bulkInBranch]);
+
+  const filteredBulkBranchStock = useMemo(() => {
+    const q = bulkPickerSearch.toLowerCase().trim();
+    return bulkBranchStock.filter((item) => {
+      if (bulkPickerCategory !== 'ALL' && item.category !== bulkPickerCategory) return false;
+      if (!q) return true;
+      return (
+        (item.description || '').toLowerCase().includes(q) ||
+        (item.itemCode || '').toLowerCase().includes(q) ||
+        (item.batchNo || '').toLowerCase().includes(q) ||
+        (item.category || '').toLowerCase().includes(q)
+      );
+    });
+  }, [bulkBranchStock, bulkPickerSearch, bulkPickerCategory]);
+
+  const filteredBulkCatalog = useMemo(() => {
+    const q = bulkPickerSearch.toLowerCase().trim();
+    return DEFAULT_STOCK_CATALOG.filter((item) => {
+      if (bulkPickerCategory !== 'ALL' && item.category !== bulkPickerCategory) return false;
+      if (!q) return true;
+      return (
+        item.description.toLowerCase().includes(q) ||
+        item.itemCode.toLowerCase().includes(q) ||
+        item.batchNo.toLowerCase().includes(q) ||
+        item.category.toLowerCase().includes(q)
+      );
+    });
+  }, [bulkPickerSearch, bulkPickerCategory]);
 
   const fillableMissingCodeCount = useMemo(() => {
     return monitoredInventoryItems.filter((item) => {
@@ -660,10 +748,74 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     ledgerSearch,
   ]);
 
+  // Per-Item Movement History entries (scoped to item's branch or all branches)
+  const itemHistoryScopedMovements = useMemo(() => {
+    if (!historyTargetItem) return [];
+    const targetDesc = (historyTargetItem.description || '').trim().toLowerCase();
+    const targetCode = (historyTargetItem.itemCode || '').trim().toLowerCase();
+    const targetBatch = (historyTargetItem.batchNo || '').trim().toLowerCase();
+
+    return stockMovements
+      .filter((mov) => {
+        if (historyBranchScope === 'ITEM_BRANCH' && mov.branchCode !== historyTargetItem.branchCode) {
+          return false;
+        }
+        if (mov.itemId && mov.itemId === historyTargetItem.id) return true;
+        const movDesc = (mov.description || '').trim().toLowerCase();
+        const movCode = (mov.itemCode || '').trim().toLowerCase();
+        const sameDesc = Boolean(targetDesc && movDesc && targetDesc === movDesc);
+        const sameCode = Boolean(targetCode && movCode && targetCode === movCode);
+        if (!sameDesc && !sameCode) return false;
+        if (historyBranchScope === 'ITEM_BRANCH') {
+          const movBatch = (mov.batchNo || '').trim().toLowerCase();
+          if (targetBatch && movBatch && targetBatch !== movBatch) return false;
+        }
+        return true;
+      })
+      .sort((a, b) =>
+        (b.timestamp || b.date || '').localeCompare(a.timestamp || a.date || '')
+      );
+  }, [stockMovements, historyTargetItem, historyBranchScope]);
+
+  const itemHistoryEntries = useMemo(() => {
+    if (historyTypeFilter === 'ALL') return itemHistoryScopedMovements;
+    return itemHistoryScopedMovements.filter(
+      (mov) => mov.movementType === historyTypeFilter
+    );
+  }, [itemHistoryScopedMovements, historyTypeFilter]);
+
+  const itemHistorySummary = useMemo(() => {
+    let totalIn = 0;
+    let totalOut = 0;
+    let cancelledCount = 0;
+    itemHistoryScopedMovements.forEach((mov) => {
+      const resolved = getLedgerEntryStatus(mov);
+      if (resolved.status === 'CANCELLED') {
+        cancelledCount += 1;
+        return;
+      }
+      const qty = Number(mov.quantity) || 0;
+      if (mov.movementType === 'STOCK_IN' || mov.movementType === 'TRANSFER_IN') {
+        totalIn += qty;
+      } else {
+        totalOut += qty;
+      }
+    });
+    return {
+      totalIn,
+      totalOut,
+      cancelledCount,
+      totalCount: itemHistoryScopedMovements.length,
+    };
+  }, [itemHistoryScopedMovements, stockTransfers]);
+
   // Filtered STR Transfers
   const filteredTransfers = useMemo(() => {
     const q = strSearch.toLowerCase().trim();
     return stockTransfers.filter((trf) => {
+      const trfDate = (trf.date || '').slice(0, 10);
+      if (strStartDate && (!trfDate || trfDate < strStartDate)) return false;
+      if (strEndDate && (!trfDate || trfDate > strEndDate)) return false;
       if (!q) return true;
       const items = Array.isArray(trf.items) ? trf.items : [];
       return (
@@ -676,7 +828,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         items.some((i) => (i.description || '').toLowerCase().includes(q))
       );
     });
-  }, [stockTransfers, strSearch]);
+  }, [stockTransfers, strSearch, strStartDate, strEndDate]);
 
   // Google Sheet Flattened Rows
   const googleSheetRows = useMemo(() => {
@@ -757,6 +909,271 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'STR Export');
     const filename = `FBC_STR_GoogleSheet_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(workbook, filename);
+    showExportToast(filename);
+  };
+
+  const handleExportStrHistoryExcel = (transfersSubset?: StockTransferRequisition[]) => {
+    const source = transfersSubset || filteredTransfers;
+    if (source.length === 0) {
+      showErrorAlert(
+        'No STR History to Export',
+        'Create at least one Stock Transfer Requisition (STR) before exporting.'
+      );
+      return;
+    }
+
+    const summaryRows = source.map((trf) => {
+      const safeLines = Array.isArray(trf.items) ? trf.items : [];
+      const activeItems = safeLines.filter((i) => i.itemStatus !== 'CANCELLED');
+      const cancelledCount = safeLines.length - activeItems.length;
+      const totalActiveQty = activeItems.reduce(
+        (sum, line) => sum + (Number(line.quantity) || 0),
+        0
+      );
+      const totalActiveAmount = activeItems.reduce(
+        (sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.unitPrice) || 0),
+        0
+      );
+
+      return {
+        Date: trf.date || '',
+        'STR Ref #': trf.strRefNumber || '',
+        'Transfer #': trf.transferNumber || '',
+        Status: trf.status || 'PENDING',
+        'From Branch': trf.fromBranchName || trf.fromBranchCode || '',
+        'To Branch': trf.toBranchName || trf.toBranchCode || '',
+        'Items Summary': activeItems
+          .map((i) => `${i.description} (${i.quantity} ${i.uom})`)
+          .join('; '),
+        'Active Lines': activeItems.length,
+        'Cancelled Lines': cancelledCount,
+        'Total Active Qty': totalActiveQty,
+        'Total Value (PHP)': Number(totalActiveAmount.toFixed(2)),
+        'Prepared By': trf.preparedBy || '',
+        'Reviewed By': trf.reviewedBy || '',
+        'Reviewed At': trf.reviewedAt ? formatStrDateTime(trf.reviewedAt) : '',
+        'Received By': trf.receivedBy || '',
+        'Received At': trf.receivedAt ? formatStrDateTime(trf.receivedAt) : '',
+        Remarks: trf.remarks || '',
+      };
+    });
+
+    const lineItemRows: Array<Record<string, string | number>> = [];
+    source.forEach((trf) => {
+      const safeLines = Array.isArray(trf.items) ? trf.items : [];
+      safeLines.forEach((line) => {
+        const qty = Number(line.quantity) || 0;
+        const price = Number(line.unitPrice) || 0;
+        lineItemRows.push({
+          Date: trf.date || '',
+          'STR Ref #': trf.strRefNumber || '',
+          'Transfer #': trf.transferNumber || '',
+          'STR Status': trf.status || 'PENDING',
+          'From Location': trf.fromBranchName || trf.fromBranchCode || '',
+          'To Location': trf.toBranchName || trf.toBranchCode || '',
+          'Item Code': line.itemCode || '',
+          Description: line.description || '',
+          Category: line.category || '',
+          'Batch / Exp': line.batchNo || '',
+          UOM: line.uom || '',
+          Price: price,
+          Qty: qty,
+          'Line Total': Number((qty * price).toFixed(2)),
+          'Item Status': line.itemStatus || (trf.status === 'CANCELLED' ? 'CANCELLED' : 'ACTIVE'),
+          'Cancel Reason': line.cancelReason || '',
+          'Prepared By': trf.preparedBy || '',
+          'Reviewed By': trf.reviewedBy || '',
+          'Received By': trf.receivedBy || '',
+          Remarks: trf.remarks || '',
+        });
+      });
+    });
+
+    const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
+    summarySheet['!cols'] = [
+      { wch: 12 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 12 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 42 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 28 },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, summarySheet, 'STR History Summary');
+
+    if (lineItemRows.length > 0) {
+      const itemsSheet = XLSX.utils.json_to_sheet(lineItemRows);
+      itemsSheet['!cols'] = [
+        { wch: 12 },
+        { wch: 16 },
+        { wch: 18 },
+        { wch: 12 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 14 },
+        { wch: 36 },
+        { wch: 22 },
+        { wch: 16 },
+        { wch: 10 },
+        { wch: 10 },
+        { wch: 8 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 24 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 18 },
+        { wch: 28 },
+      ];
+      XLSX.utils.book_append_sheet(workbook, itemsSheet, 'STR Line Items');
+    }
+
+    const filename = `FBC_STR_History_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(workbook, filename);
+    showExportToast(filename);
+  };
+
+  const handleExportItemHistoryXlsx = () => {
+    if (!historyTargetItem) return;
+    if (itemHistoryEntries.length === 0) {
+      showErrorAlert(
+        'No Movement History',
+        'There are no recorded movements matching the current filters for this item.'
+      );
+      return;
+    }
+
+    const rows = itemHistoryEntries.map((mov) => {
+      const isInbound =
+        mov.movementType === 'STOCK_IN' || mov.movementType === 'TRANSFER_IN';
+      const resolved = getLedgerEntryStatus(mov);
+      return {
+        Date: mov.date || '',
+        'Timestamp': mov.timestamp ? formatStrDateTime(mov.timestamp) : '',
+        Type: mov.movementType,
+        Status: resolved.label,
+        Branch: mov.branchName || mov.branchCode,
+        'Branch From': getLedgerBranchFrom(mov),
+        'Branch To': getLedgerBranchTo(mov),
+        'Ref #': mov.refNumber || '',
+        'Transfer #': mov.transferNumber || '',
+        'Item Code': mov.itemCode || historyTargetItem.itemCode || '',
+        Description: mov.description || historyTargetItem.description,
+        'Batch No': mov.batchNo || '',
+        UOM: mov.uom || historyTargetItem.uom,
+        'Prev Qty': Number(mov.previousQty) || 0,
+        'Movement Qty': isInbound ? Number(mov.quantity) || 0 : -(Number(mov.quantity) || 0),
+        'New Qty': Number(mov.newQty) || 0,
+        'Performed By': mov.performedBy || '',
+        Notes: mov.notes || '',
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet['!cols'] = [
+      { wch: 12 },
+      { wch: 20 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 14 },
+      { wch: 32 },
+      { wch: 14 },
+      { wch: 10 },
+      { wch: 10 },
+      { wch: 12 },
+      { wch: 10 },
+      { wch: 18 },
+      { wch: 28 },
+    ];
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Item Movement History');
+    const safeSlug = (historyTargetItem.itemCode || historyTargetItem.description || 'Item')
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .slice(0, 28);
+    const filename = `FBC_Item_History_${safeSlug}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(workbook, filename);
+    showExportToast(filename);
+  };
+
+  const handleExportLedgerXlsx = () => {
+    if (filteredMovements.length === 0) {
+      showErrorAlert(
+        'No Movement Entries',
+        'There are no stock movement entries matching your current filters.'
+      );
+      return;
+    }
+
+    const rows = filteredMovements.map((mov) => {
+      const isInbound =
+        mov.movementType === 'STOCK_IN' || mov.movementType === 'TRANSFER_IN';
+      const resolved = getLedgerEntryStatus(mov);
+      return {
+        Date: mov.date || '',
+        'Timestamp': mov.timestamp ? formatStrDateTime(mov.timestamp) : '',
+        Type: mov.movementType,
+        Status: resolved.label,
+        Branch: mov.branchName || mov.branchCode,
+        'Branch From': getLedgerBranchFrom(mov),
+        'Branch To': getLedgerBranchTo(mov),
+        'Ref #': mov.refNumber || '',
+        'Transfer #': mov.transferNumber || '',
+        'Item Code': mov.itemCode || '',
+        Description: mov.description || '',
+        Category: mov.category || '',
+        'Batch No': mov.batchNo || '',
+        UOM: mov.uom || '',
+        'Prev Qty': Number(mov.previousQty) || 0,
+        'Movement Qty': isInbound ? Number(mov.quantity) || 0 : -(Number(mov.quantity) || 0),
+        'New Qty': Number(mov.newQty) || 0,
+        'Performed By': mov.performedBy || '',
+        Notes: mov.notes || '',
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet['!cols'] = [
+      { wch: 12 },
+      { wch: 20 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 14 },
+      { wch: 32 },
+      { wch: 20 },
+      { wch: 14 },
+      { wch: 10 },
+      { wch: 10 },
+      { wch: 12 },
+      { wch: 10 },
+      { wch: 18 },
+      { wch: 28 },
+    ];
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Stock Movement Ledger');
+    const filename = `FBC_Movement_Ledger_${new Date().toISOString().slice(0, 10)}.xlsx`;
     XLSX.writeFile(workbook, filename);
     showExportToast(filename);
   };
@@ -1541,6 +1958,345 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     );
   };
 
+  // Super Admin Bulk Stock In (Delivery) Handlers
+  const createEmptyBulkInLine = (): BulkStockInLine => ({
+    id: `bulkin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    itemId: undefined,
+    itemCode: '',
+    description: '',
+    category: categoryOptions[0] || 'BEVERAGE',
+    batchNo: '',
+    expiryDate: '',
+    uom: 'Pack',
+    unitPrice: 0,
+    quantity: 1,
+  });
+
+  const handleOpenBulkStockInModal = () => {
+    if (!isSuperAdmin) {
+      showErrorAlert(
+        'Restricted Action',
+        'Only Super Admin can record Bulk Stock In deliveries.'
+      );
+      return;
+    }
+    const preferredBranch: WarehouseBranchCode =
+      branchFilter !== 'ALL' && isMonitoredWarehouseBranch(branchFilter as WarehouseBranchCode)
+        ? (branchFilter as WarehouseBranchCode)
+        : defaultUserBranch;
+    const nowDate = new Date().toISOString().slice(0, 10);
+    setBulkInBranch(preferredBranch);
+    setBulkInDate(nowDate);
+    setBulkInRef(`DEL-${nowDate.slice(2).replace(/-/g, '')}`);
+    setBulkInSource('Supplier Delivery');
+    setBulkInNotes('');
+    setBulkInLines([createEmptyBulkInLine()]);
+    setIsBulkPickerOpen(true);
+    setBulkPickerSearch('');
+    setBulkPickerCategory('ALL');
+    setBulkPickerSource(
+      inventoryItems.some((i) => i.branchCode === preferredBranch) ? 'BRANCH' : 'CATALOG'
+    );
+    setShowBulkStockInModal(true);
+  };
+
+  const handleBulkInBranchChange = (nextBranch: WarehouseBranchCode) => {
+    setBulkInBranch(nextBranch);
+    setBulkPickerSource(
+      inventoryItems.some((i) => i.branchCode === nextBranch) ? 'BRANCH' : 'CATALOG'
+    );
+    // Re-bind any line itemId against the newly selected branch
+    setBulkInLines((prev) =>
+      prev.map((line) => {
+        const descLower = line.description.trim().toLowerCase();
+        const batchLower = line.batchNo.trim().toLowerCase();
+        if (!descLower) return { ...line, itemId: undefined };
+        const matched =
+          inventoryItems.find(
+            (w) =>
+              w.branchCode === nextBranch &&
+              (w.description || '').trim().toLowerCase() === descLower &&
+              (w.batchNo || '').trim().toLowerCase() === batchLower
+          ) ||
+          inventoryItems.find(
+            (w) =>
+              w.branchCode === nextBranch &&
+              (w.description || '').trim().toLowerCase() === descLower
+          );
+        return { ...line, itemId: matched?.id };
+      })
+    );
+  };
+
+  const handleAddStockItemToBulkIn = (chosen: WarehouseInventoryItem) => {
+    const resolvedCode =
+      (chosen.itemCode || '').trim() ||
+      findStockReferenceByDescription(chosen.description, inventoryItems, bulkInBranch)
+        ?.itemCode ||
+      '';
+    setBulkInLines((prev) => {
+      const cleanedPrev =
+        prev.length === 1 && !prev[0].description.trim() && !prev[0].itemCode.trim()
+          ? []
+          : prev;
+      const existingIdx = cleanedPrev.findIndex(
+        (l) =>
+          (l.itemId && l.itemId === chosen.id) ||
+          (l.description.trim().toLowerCase() === chosen.description.trim().toLowerCase() &&
+            l.batchNo.trim().toLowerCase() === (chosen.batchNo || '').trim().toLowerCase())
+      );
+      if (existingIdx >= 0) {
+        return cleanedPrev.map((l, idx) =>
+          idx === existingIdx ? { ...l, quantity: (Number(l.quantity) || 0) + 1 } : l
+        );
+      }
+      return [
+        ...cleanedPrev,
+        {
+          id: `bulkin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          itemId: chosen.id,
+          itemCode: resolvedCode,
+          description: chosen.description,
+          category: chosen.category,
+          batchNo: chosen.batchNo || '',
+          expiryDate: chosen.expiryDate || resolveItemExpiryDate(chosen) || '',
+          uom: chosen.uom || 'Pack',
+          unitPrice: Number(chosen.unitPrice) || 0,
+          quantity: 1,
+        },
+      ];
+    });
+  };
+
+  const handleAddCatalogItemToBulkIn = (
+    catItem: (typeof DEFAULT_STOCK_CATALOG)[number]
+  ) => {
+    const matchedBranch = bulkBranchStock.find(
+      (s) => s.description.toLowerCase() === catItem.description.toLowerCase()
+    );
+    if (matchedBranch) {
+      handleAddStockItemToBulkIn(matchedBranch);
+      return;
+    }
+    setBulkInLines((prev) => {
+      const cleanedPrev =
+        prev.length === 1 && !prev[0].description.trim() && !prev[0].itemCode.trim()
+          ? []
+          : prev;
+      const existingIdx = cleanedPrev.findIndex(
+        (l) => l.description.trim().toLowerCase() === catItem.description.trim().toLowerCase()
+      );
+      if (existingIdx >= 0) {
+        return cleanedPrev.map((l, idx) =>
+          idx === existingIdx ? { ...l, quantity: (Number(l.quantity) || 0) + 1 } : l
+        );
+      }
+      const refPrice =
+        findStockReferenceByDescription(
+          catItem.description,
+          inventoryItems,
+          bulkInBranch
+        )?.unitPrice ?? 0;
+      return [
+        ...cleanedPrev,
+        {
+          id: `bulkin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          itemId: undefined,
+          itemCode: catItem.itemCode || '',
+          description: catItem.description,
+          category: catItem.category,
+          batchNo: catItem.batchNo || '',
+          expiryDate: '',
+          uom: catItem.uom || 'Pack',
+          unitPrice: refPrice,
+          quantity: 1,
+        },
+      ];
+    });
+  };
+
+  const handleLoadLowStockToBulkIn = () => {
+    const lowItems = bulkBranchStock.filter(
+      (item) => isItemLowStock(item) || (Number(item.quantity) || 0) <= 0
+    );
+    if (lowItems.length === 0) {
+      showErrorAlert(
+        'No Low-Stock Items',
+        `${getBranchByCode(bulkInBranch)?.name || bulkInBranch} currently has no low-stock or zero-stock items.`
+      );
+      return;
+    }
+    let addedCount = 0;
+    setBulkInLines((prev) => {
+      const base =
+        prev.length === 1 && !prev[0].description.trim() && !prev[0].itemCode.trim()
+          ? []
+          : [...prev];
+      lowItems.forEach((item) => {
+        const already = base.some(
+          (l) =>
+            l.itemId === item.id ||
+            (l.description.trim().toLowerCase() === item.description.trim().toLowerCase() &&
+              l.batchNo.trim().toLowerCase() === (item.batchNo || '').trim().toLowerCase())
+        );
+        if (!already) {
+          const suggestedQty = Math.max(
+            1,
+            getItemReorderLevel(item) - (Number(item.quantity) || 0)
+          );
+          base.push({
+            id: `bulkin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            itemId: item.id,
+            itemCode: item.itemCode || '',
+            description: item.description,
+            category: item.category,
+            batchNo: item.batchNo || '',
+            expiryDate: item.expiryDate || resolveItemExpiryDate(item) || '',
+            uom: item.uom || 'Pack',
+            unitPrice: Number(item.unitPrice) || 0,
+            quantity: suggestedQty,
+          });
+          addedCount += 1;
+        }
+      });
+      return base.length > 0 ? base : [createEmptyBulkInLine()];
+    });
+    if (addedCount > 0) {
+      showActionSuccessToast(`Loaded ${addedCount} low/zero-stock item(s)`);
+    } else {
+      showActionSuccessToast('All low-stock items are already in the delivery list');
+    }
+  };
+
+  const handleBulkLineCodeChange = (lineId: string, nextCode: string) => {
+    const ref = findStockReferenceByCode(nextCode, inventoryItems, bulkInBranch);
+    const matchedBranch = ref
+      ? bulkBranchStock.find(
+          (w) =>
+            w.description.trim().toLowerCase() === ref.description.trim().toLowerCase()
+        )
+      : undefined;
+    setBulkInLines((prev) =>
+      prev.map((row) =>
+        row.id === lineId
+          ? {
+              ...row,
+              itemCode: nextCode,
+              ...(ref
+                ? {
+                    itemId: matchedBranch?.id,
+                    description: ref.description,
+                    category: ref.category,
+                    batchNo: matchedBranch?.batchNo ?? ref.batchNo,
+                    expiryDate:
+                      matchedBranch?.expiryDate ||
+                      resolveItemExpiryDate({ expiryDate: undefined, batchNo: ref.batchNo }) ||
+                      row.expiryDate,
+                    uom: ref.uom,
+                    unitPrice: ref.unitPrice,
+                  }
+                : {}),
+            }
+          : row
+      )
+    );
+  };
+
+  const handleBulkLineDescChange = (lineId: string, nextDesc: string) => {
+    const ref = findStockReferenceByDescription(nextDesc, inventoryItems, bulkInBranch);
+    const matchedBranch = ref
+      ? bulkBranchStock.find(
+          (w) =>
+            w.description.trim().toLowerCase() === ref.description.trim().toLowerCase()
+        )
+      : undefined;
+    setBulkInLines((prev) =>
+      prev.map((row) =>
+        row.id === lineId
+          ? {
+              ...row,
+              description: nextDesc,
+              ...(ref
+                ? {
+                    itemId: matchedBranch?.id,
+                    itemCode: ref.itemCode || row.itemCode,
+                    category: ref.category,
+                    batchNo: matchedBranch?.batchNo ?? ref.batchNo,
+                    expiryDate:
+                      matchedBranch?.expiryDate ||
+                      resolveItemExpiryDate({ expiryDate: undefined, batchNo: ref.batchNo }) ||
+                      row.expiryDate,
+                    uom: ref.uom,
+                    unitPrice: ref.unitPrice,
+                  }
+                : {}),
+            }
+          : row
+      )
+    );
+  };
+
+  const getBulkLineCurrentQty = (line: BulkStockInLine): number | null => {
+    const matched =
+      (line.itemId && bulkBranchStock.find((w) => w.id === line.itemId)) ||
+      bulkBranchStock.find(
+        (w) =>
+          w.description.trim().toLowerCase() === line.description.trim().toLowerCase() &&
+          (w.batchNo || '').trim().toLowerCase() === line.batchNo.trim().toLowerCase()
+      ) ||
+      (line.description.trim()
+        ? bulkBranchStock.find(
+            (w) => w.description.trim().toLowerCase() === line.description.trim().toLowerCase()
+          )
+        : undefined);
+    return matched ? Number(matched.quantity) || 0 : null;
+  };
+
+  const handleSubmitBulkStockIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isSuperAdmin || isSubmittingBulkIn || !onBulkStockIn) return;
+
+    const validLines = bulkInLines.filter(
+      (line) => line.description.trim() && (Number(line.quantity) || 0) > 0
+    );
+    if (validLines.length === 0) {
+      showErrorAlert(
+        'No Delivery Items',
+        'Add at least one item with a description and a delivery quantity greater than 0.'
+      );
+      return;
+    }
+
+    setIsSubmittingBulkIn(true);
+    try {
+      const summary = await onBulkStockIn({
+        branchCode: bulkInBranch,
+        date: bulkInDate || todayStr,
+        refNumber: bulkInRef.trim() || `DEL-${todayStr.slice(2).replace(/-/g, '')}`,
+        supplierOrSource: bulkInSource.trim() || 'Supplier Delivery',
+        notes: bulkInNotes.trim() || undefined,
+        lines: validLines.map((line) => ({
+          itemId: line.itemId,
+          itemCode: line.itemCode.trim() || undefined,
+          description: line.description.trim(),
+          category: line.category.trim() || 'GENERAL',
+          batchNo: line.batchNo.trim() || undefined,
+          expiryDate: normalizeExpiryDate(line.expiryDate) || line.expiryDate.trim() || undefined,
+          uom: line.uom || 'Pack',
+          unitPrice: Number(line.unitPrice) || 0,
+          quantity: Number(line.quantity) || 0,
+        })),
+      });
+
+      setShowBulkStockInModal(false);
+      showActionSuccessToast(
+        `Bulk Stock In saved: +${summary.totalQtyAdded.toLocaleString()} qty (${summary.updatedCount} updated, ${summary.createdCount} added)`
+      );
+    } finally {
+      setIsSubmittingBulkIn(false);
+    }
+  };
+
   // STR Line Item Search Modal Handlers
   const handleOpenItemPicker = (lineIdx: number) => {
     setPickerLineIdx(lineIdx);
@@ -1628,7 +2384,17 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     const issuingExact = trimmed
       ? issuingBranchStock.find(
           (s) => (s.itemCode || '').trim().toLowerCase() === trimmed
-        )
+        ) ||
+        (ref?.description
+          ? issuingBranchStock.find(
+              (s) =>
+                (s.description || '').toLowerCase() === ref.description.toLowerCase() &&
+                (!ref.batchNo || (s.batchNo || '').toLowerCase() === ref.batchNo.toLowerCase())
+            ) ||
+            issuingBranchStock.find(
+              (s) => (s.description || '').toLowerCase() === ref.description.toLowerCase()
+            )
+          : undefined)
       : undefined;
 
     const isExactMatchZeroStock = Boolean(
@@ -2278,6 +3044,27 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     }
   };
 
+  const handleConfirmDeleteStr = async (trf: StockTransferRequisition) => {
+    if (!onDeleteStockTransfer || !isSuperAdmin) return;
+    const result = await yellowCabSwal.fire({
+      icon: 'warning',
+      title: `Delete STR ${trf.strRefNumber}?`,
+      text: `This will permanently delete STR ${trf.strRefNumber} (${trf.fromBranchName} -> ${trf.toBranchName}), remove its linked Stock Movement Ledger entries, and reverse any stock deductions/additions applied to monitored branch inventory.`,
+      showCancelButton: true,
+      confirmButtonText: 'Delete STR',
+      cancelButtonText: 'Cancel',
+    });
+    if (result.isConfirmed) {
+      try {
+        await onDeleteStockTransfer(trf.id);
+        showActionSuccessToast(`Deleted STR ${trf.strRefNumber} and reversed linked stock.`);
+      } catch (err) {
+        console.error('Failed deleting STR:', err);
+        showErrorAlert('Delete Failed', 'Could not delete STR record. Please try again.');
+      }
+    }
+  };
+
   const formatStrDateTime = (iso?: string) => {
     if (!iso) return '';
     const d = new Date(iso);
@@ -2311,6 +3098,12 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
     if (mov.movementType === 'TRANSFER_IN') return mov.branchName;
     if (mov.movementType === 'STOCK_IN') return mov.branchName;
     return 'Store Usage / Out';
+  };
+
+  const handleOpenItemHistoryModal = (item: WarehouseInventoryItem) => {
+    setHistoryTargetItem(item);
+    setHistoryBranchScope('ITEM_BRANCH');
+    setHistoryTypeFilter('ALL');
   };
 
   // Super Admin Ledger Add / Edit / Delete Handlers
@@ -2679,7 +3472,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                     : 'text-zinc-600 hover:text-zinc-950'
                 }`}
               >
-                Ledger
+                <History className="w-3.5 h-3.5" />
+                Movement Ledger
                 <span className="font-mono text-[10px] opacity-80 tabular-nums">
                   ({stockMovements.length})
                 </span>
@@ -2721,6 +3515,15 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
           {isSuperAdmin && (
             <>
+              <button
+                type="button"
+                onClick={handleOpenBulkStockInModal}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black whitespace-nowrap cursor-pointer transition-colors shadow-2xs"
+                title="Record Bulk Stock In Delivery (Super Admin)"
+              >
+                <ArrowDownToLine className="w-3.5 h-3.5" />
+                Bulk Stock In
+              </button>
               <button
                 type="button"
                 onClick={handleExportStockItemsXlsx}
@@ -3190,7 +3993,16 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           )}
                         </div>
 
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenItemHistoryModal(item)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300 text-[11px] font-bold whitespace-nowrap cursor-pointer"
+                            title="View Item Movement History"
+                          >
+                            <History className="w-3.5 h-3.5 text-amber-700" />
+                            History
+                          </button>
                           {isSuperAdmin && (
                             <>
                               <button
@@ -3239,13 +4051,13 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                     <tr className="bg-zinc-950 text-amber-400 uppercase text-[10px] tracking-wider">
                       <th className="px-3 py-2 font-black w-24">Code</th>
                       <th className="px-3 py-2 font-black">Stock Item</th>
+                      <th className="px-3 py-2 font-black text-right">Qty</th>
+                      <th className="px-3 py-2 font-black text-center">UOM</th>
+                      <th className="px-3 py-2 font-black text-right">Min</th>
                       <th className="px-3 py-2 font-black">Category</th>
                       <th className="px-3 py-2 font-black">Branch</th>
                       <th className="px-3 py-2 font-black">Batch / Exp</th>
-                      <th className="px-3 py-2 font-black text-center">UOM</th>
-                      <th className="px-3 py-2 font-black text-right">Min</th>
-                      <th className="px-3 py-2 font-black text-right">Qty</th>
-                      <th className="px-3 py-2 font-black text-right w-40">Actions</th>
+                      <th className="px-3 py-2 font-black text-right w-48">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-200">
@@ -3291,42 +4103,32 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                   />
                                 </span>
                               )}
-                              <span>{item.description}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenItemHistoryModal(item)}
+                                className="text-left hover:text-amber-700 hover:underline cursor-pointer"
+                                title="Click to view movement history for this item"
+                              >
+                                {item.description}
+                              </button>
                             </div>
                           </td>
-                          <td className="px-3 py-2 text-[11px] font-medium text-zinc-600 whitespace-nowrap">
-                            {item.category}
-                          </td>
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            <span className="font-bold text-zinc-800">{item.branchName}</span>
-                            <span className="ml-1 font-mono text-[10px] text-zinc-400">
-                              {item.branchCode}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2 font-mono text-[11px] text-zinc-600 whitespace-nowrap">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span>
-                                {item.batchNo || expiryInfo.expiryDate || '—'}
-                              </span>
-                              {item.batchNo &&
-                                expiryInfo.expiryDate &&
-                                item.expiryDate &&
-                                item.batchNo !== item.expiryDate && (
-                                  <span className="text-[10px] text-zinc-500">
-                                    ({expiryInfo.expiryDate})
-                                  </span>
-                                )}
-                              {expiryInfo.isAlertActive && (
-                                <span
-                                  className={`px-1.5 py-0.5 rounded font-sans text-[9px] font-black uppercase tracking-wider ${
-                                    isExpired
-                                      ? 'bg-rose-600 text-white'
-                                      : 'bg-amber-500 text-zinc-950'
-                                  }`}
-                                >
-                                  {expiryInfo.label}
+                          <td
+                            className={`px-3 py-2 text-right font-mono font-black tabular-nums whitespace-nowrap ${
+                              isLow
+                                ? 'text-rose-700'
+                                : item.quantity > 0
+                                ? 'text-zinc-950'
+                                : 'text-zinc-400'
+                            }`}
+                          >
+                            <div className="inline-flex items-center justify-end gap-1.5">
+                              {isLow && (
+                                <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[9px] font-black uppercase tracking-wider">
+                                  Low
                                 </span>
                               )}
+                              <span>{Number(item.quantity).toLocaleString()}</span>
                             </div>
                           </td>
                           <td className="px-3 py-2 text-center font-semibold text-zinc-700 whitespace-nowrap">
@@ -3384,26 +4186,52 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               </button>
                             )}
                           </td>
-                          <td
-                            className={`px-3 py-2 text-right font-mono font-black tabular-nums whitespace-nowrap ${
-                              isLow
-                                ? 'text-rose-700'
-                                : item.quantity > 0
-                                ? 'text-zinc-950'
-                                : 'text-zinc-400'
-                            }`}
-                          >
-                            <div className="inline-flex items-center justify-end gap-1.5">
-                              {isLow && (
-                                <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[9px] font-black uppercase tracking-wider">
-                                  Low
+                          <td className="px-3 py-2 text-[11px] font-medium text-zinc-600 whitespace-nowrap">
+                            {item.category}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            <span className="font-bold text-zinc-800">{item.branchName}</span>
+                            <span className="ml-1 font-mono text-[10px] text-zinc-400">
+                              {item.branchCode}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 font-mono text-[11px] text-zinc-600 whitespace-nowrap">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span>
+                                {item.batchNo || expiryInfo.expiryDate || '—'}
+                              </span>
+                              {item.batchNo &&
+                                expiryInfo.expiryDate &&
+                                item.expiryDate &&
+                                item.batchNo !== item.expiryDate && (
+                                  <span className="text-[10px] text-zinc-500">
+                                    ({expiryInfo.expiryDate})
+                                  </span>
+                                )}
+                              {expiryInfo.isAlertActive && (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded font-sans text-[9px] font-black uppercase tracking-wider ${
+                                    isExpired
+                                      ? 'bg-rose-600 text-white'
+                                      : 'bg-amber-500 text-zinc-950'
+                                  }`}
+                                >
+                                  {expiryInfo.label}
                                 </span>
                               )}
-                              <span>{Number(item.quantity).toLocaleString()}</span>
                             </div>
                           </td>
                           <td className="px-3 py-2 text-right whitespace-nowrap">
                             <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenItemHistoryModal(item)}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300 text-[10px] font-bold cursor-pointer"
+                                title="View Item Movement History"
+                              >
+                                <History className="w-3 h-3 text-amber-700" />
+                                History
+                              </button>
                               {isSuperAdmin && (
                                 <>
                                   <button
@@ -3540,6 +4368,54 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                       const nextFrom = e.target.value as WarehouseBranchCode;
                       setFromBranchCode(nextFrom);
                       refreshStrNumbers(nextFrom, toBranchCode, prefixBasis, strDate);
+                      if (isMonitoredWarehouseBranch(nextFrom)) {
+                        const nextStock = inventoryItems.filter((i) => i.branchCode === nextFrom);
+                        let clearedCount = 0;
+                        setLineItems((prev) =>
+                          prev.map((row) => {
+                            if (!row.description && !row.itemCode) return row;
+                            const match =
+                              (row.itemId &&
+                                nextStock.find((s) => s.id === row.itemId)) ||
+                              (row.itemCode
+                                ? nextStock.find(
+                                    (s) =>
+                                      (s.itemCode || '').trim().toLowerCase() ===
+                                      (row.itemCode || '').trim().toLowerCase()
+                                  )
+                                : undefined) ||
+                              nextStock.find(
+                                (s) =>
+                                  (s.description || '').toLowerCase() ===
+                                    (row.description || '').toLowerCase() &&
+                                  (s.batchNo || '').toLowerCase() ===
+                                    (row.batchNo || '').toLowerCase()
+                              );
+                            if (!match || (Number(match.quantity) || 0) <= 0) {
+                              clearedCount++;
+                              return {
+                                ...row,
+                                itemId: '',
+                                itemCode: '',
+                                description: '',
+                              };
+                            }
+                            return {
+                              ...row,
+                              itemId: match.id,
+                              itemCode: match.itemCode || row.itemCode,
+                              uom: match.uom || row.uom,
+                              unitPrice: match.unitPrice ?? row.unitPrice,
+                            };
+                          })
+                        );
+                        if (clearedCount > 0) {
+                          showErrorAlert(
+                            '0-Stock Item(s) Cleared',
+                            `${clearedCount} selected item(s) have 0 quantity in ${getBranchByCode(nextFrom)?.name || nextFrom} and were cleared.`
+                          );
+                        }
+                      }
                     }}
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 text-xs font-bold text-zinc-950 focus:outline-none focus:ring-2 focus:ring-amber-400"
                   >
@@ -3739,27 +4615,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <div className="grid grid-cols-3 gap-2 items-start">
                           <div>
                             <label className="block text-[9px] font-black uppercase text-zinc-500 mb-0.5">
-                              Item Code
-                            </label>
-                            <input
-                              type="text"
-                              list="str-item-code-list"
-                              value={line.itemCode || ''}
-                              onChange={(e) => handleStrLineCodeChange(idx, e.target.value)}
-                              placeholder="01-0601"
-                              className="w-full px-2 py-1.5 rounded-lg border border-zinc-300 bg-white font-mono text-[11px] font-bold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[9px] font-black uppercase text-zinc-500 mb-0.5">
-                              UOM
-                            </label>
-                            <div className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 bg-zinc-100 text-xs font-bold text-zinc-800 text-center">
-                              {matchedStock?.uom || (line.description ? line.uom : '—')}
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-[9px] font-black uppercase text-zinc-500 mb-0.5">
                               Qty
                             </label>
                             <input
@@ -3788,6 +4643,27 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               </div>
                             )}
                           </div>
+                          <div>
+                            <label className="block text-[9px] font-black uppercase text-zinc-500 mb-0.5">
+                              UOM
+                            </label>
+                            <div className="w-full px-2 py-1.5 rounded-lg border border-zinc-200 bg-zinc-100 text-xs font-bold text-zinc-800 text-center">
+                              {matchedStock?.uom || (line.description ? line.uom : '—')}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-[9px] font-black uppercase text-zinc-500 mb-0.5">
+                              Item Code
+                            </label>
+                            <input
+                              type="text"
+                              list="str-item-code-list"
+                              value={line.itemCode || ''}
+                              onChange={(e) => handleStrLineCodeChange(idx, e.target.value)}
+                              placeholder="01-0601"
+                              className="w-full px-2 py-1.5 rounded-lg border border-zinc-300 bg-white font-mono text-[11px] font-bold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                            />
+                          </div>
                         </div>
                       </div>
                     );
@@ -3802,8 +4678,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <th className="px-3 py-1.5 w-10 text-center">#</th>
                         <th className="px-2 py-1.5 w-28">Item Code</th>
                         <th className="px-3 py-1.5">Pick Item</th>
-                        <th className="px-3 py-1.5 w-28">UOM</th>
                         <th className="px-3 py-1.5 w-28 text-right">Qty</th>
+                        <th className="px-3 py-1.5 w-28">UOM</th>
                         <th className="px-3 py-1.5 w-10"></th>
                       </tr>
                     </thead>
@@ -3877,14 +4753,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               </div>
                             </td>
                             <td className="p-1.5">
-                              <div
-                                className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-zinc-100 text-xs font-bold text-zinc-800 text-center whitespace-nowrap"
-                                title="UOM is locked to the stock item's UOM"
-                              >
-                                {matchedStock?.uom || (line.description ? line.uom : '—')}
-                              </div>
-                            </td>
-                            <td className="p-1.5">
                               <input
                                 type="number"
                                 min={1}
@@ -3910,6 +4778,14 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                   {isLineLowStock ? ' (LOW)' : ''}
                                 </div>
                               )}
+                            </td>
+                            <td className="p-1.5">
+                              <div
+                                className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-zinc-100 text-xs font-bold text-zinc-800 text-center whitespace-nowrap"
+                                title="UOM is locked to the stock item's UOM"
+                              >
+                                {matchedStock?.uom || (line.description ? line.uom : '—')}
+                              </div>
                             </td>
                             <td className="p-1.5 text-center">
                               <button
@@ -4011,21 +4887,78 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                   </span>
                 )}
               </div>
-              <div className="relative w-full sm:w-auto sm:min-w-[200px]">
-                <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={strSearch}
-                  onChange={(e) => setStrSearch(e.target.value)}
-                  placeholder="Search STR #, branch, item..."
-                  className="w-full pl-8 pr-2.5 py-1 rounded-lg border border-zinc-300 bg-white text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                />
+              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                <div className="relative flex-1 sm:flex-initial sm:min-w-[200px]">
+                  <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={strSearch}
+                    onChange={(e) => setStrSearch(e.target.value)}
+                    placeholder="Search STR #, branch, item..."
+                    className="w-full pl-8 pr-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <label className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-zinc-600">
+                    <span>From</span>
+                    <input
+                      id="str-filter-start-date"
+                      type="date"
+                      value={strStartDate}
+                      max={strEndDate || undefined}
+                      onChange={(e) => setStrStartDate(e.target.value)}
+                      aria-label="Filter STR history from date"
+                      className="px-2 py-1 rounded-lg border border-zinc-300 bg-white text-xs font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    />
+                  </label>
+                  <label className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-zinc-600">
+                    <span>To</span>
+                    <input
+                      id="str-filter-end-date"
+                      type="date"
+                      value={strEndDate}
+                      min={strStartDate || undefined}
+                      onChange={(e) => setStrEndDate(e.target.value)}
+                      aria-label="Filter STR history to date"
+                      className="px-2 py-1 rounded-lg border border-zinc-300 bg-white text-xs font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    />
+                  </label>
+                  {(strSearch || strStartDate || strEndDate) && (
+                    <button
+                      id="btn-clear-str-filters"
+                      type="button"
+                      onClick={() => {
+                        setStrSearch('');
+                        setStrStartDate('');
+                        setStrEndDate('');
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] font-bold cursor-pointer transition-colors"
+                      title="Clear search and date range filters"
+                    >
+                      <X className="w-3 h-3" />
+                      <span>Clear</span>
+                    </button>
+                  )}
+                </div>
+                <button
+                  id="btn-export-str-history-excel"
+                  type="button"
+                  disabled={filteredTransfers.length === 0}
+                  onClick={() => handleExportStrHistoryExcel(filteredTransfers)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-40 transition-colors"
+                  title="Export filtered STR history records and line items to Excel (.xlsx)"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Export Excel ({filteredTransfers.length})</span>
+                </button>
               </div>
             </div>
 
             {filteredTransfers.length === 0 ? (
               <div className="p-6 text-center text-xs text-zinc-500">
-                No Stock Transfer Requisitions recorded yet.
+                {strSearch || strStartDate || strEndDate
+                  ? 'No Stock Transfer Requisitions match your search or date range.'
+                  : 'No Stock Transfer Requisitions recorded yet.'}
               </div>
             ) : (
               <>
@@ -4154,33 +5087,38 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center justify-end gap-1.5 pt-2 border-t border-zinc-200/80">
-                          {isSuperAdmin && isPending && !trf.reviewedBy && (
-                            <button
-                              type="button"
-                              onClick={() => handleConfirmReviewStr(trf)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
-                            >
-                              Review Items
-                            </button>
-                          )}
-                          {isPending && (
-                            <button
-                              type="button"
-                              onClick={() => handleConfirmReceiveStr(trf)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
-                            >
-                              <Check className="w-3 h-3" /> Mark Received
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handleExportGoogleSheetXlsx([trf])}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-bold whitespace-nowrap cursor-pointer"
-                          >
-                            <FileSpreadsheet className="w-3.5 h-3.5" /> Excel
-                          </button>
-                        </div>
+                        {(isPending || (isSuperAdmin && Boolean(onDeleteStockTransfer))) && (
+                          <div className="flex flex-wrap items-center justify-end gap-1.5 pt-2 border-t border-zinc-200/80">
+                            {isSuperAdmin && isPending && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmReviewStr(trf)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
+                              >
+                                {trf.reviewedBy ? 'Edit Review' : 'Review Items'}
+                              </button>
+                            )}
+                            {isPending && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmReceiveStr(trf)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
+                              >
+                                <Check className="w-3 h-3" /> Mark Received
+                              </button>
+                            )}
+                            {isSuperAdmin && onDeleteStockTransfer && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmDeleteStr(trf)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-black uppercase whitespace-nowrap cursor-pointer"
+                                title="Delete STR record and reverse linked stock"
+                              >
+                                <Trash2 className="w-3 h-3" /> Delete
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -4196,8 +5134,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <th className="px-3 py-2 font-black">Status</th>
                         <th className="px-3 py-2 font-black">From → To</th>
                         <th className="px-3 py-2 font-black">Items</th>
+                        <th className="px-3 py-2 font-black text-right">Qty</th>
                         <th className="px-3 py-2 font-black">Signatories & Receipt Details</th>
-                        <th className="px-3 py-2 font-black text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-200">
@@ -4263,7 +5201,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                   </div>
                                   <div className="text-[10px] font-mono text-zinc-500 tabular-nums flex flex-wrap items-center gap-1.5">
                                     <span>
-                                      {activeItems.length} active line(s) · Qty: {totalQty}
+                                      {activeItems.length} active line(s)
                                     </span>
                                     {cancelledItemsCount > 0 && (
                                       <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 font-bold">
@@ -4285,33 +5223,58 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                 </button>
                               </div>
                             </td>
-                            <td className="px-3 py-2 text-[11px] text-zinc-700 space-y-0.5">
-                              <div>
-                                Prep: <strong>{trf.preparedBy}</strong> · Rev:{' '}
-                                {trf.reviewedBy ? (
-                                  <strong className="text-zinc-900">
-                                    {trf.reviewedBy}
-                                    {trf.reviewedAt && (
-                                      <span className="ml-1 font-mono font-normal text-[10px] text-zinc-500">
-                                        ({formatStrDateTime(trf.reviewedAt)})
-                                      </span>
-                                    )}
-                                  </strong>
-                                ) : (
-                                  <span className="text-amber-700 italic">
-                                    Awaiting Super Admin review
-                                  </span>
+                            <td className="px-3 py-2 text-right font-mono font-black tabular-nums whitespace-nowrap text-zinc-950">
+                              {totalQty.toLocaleString()}
+                            </td>
+                            <td className="px-3 py-2 text-[11px] text-zinc-700 space-y-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span>
+                                  Prep: <strong>{trf.preparedBy}</strong> · Rev:{' '}
+                                  {trf.reviewedBy ? (
+                                    <strong className="text-zinc-900">
+                                      {trf.reviewedBy}
+                                      {trf.reviewedAt && (
+                                        <span className="ml-1 font-mono font-normal text-[10px] text-zinc-500">
+                                          ({formatStrDateTime(trf.reviewedAt)})
+                                        </span>
+                                      )}
+                                    </strong>
+                                  ) : (
+                                    <span className="text-amber-700 italic">
+                                      Awaiting Super Admin review
+                                    </span>
+                                  )}
+                                </span>
+                                {isSuperAdmin && isPending && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleConfirmReviewStr(trf)}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase cursor-pointer"
+                                    title="Edit/add requested quantities or cancel unavailable stock (Super Admin only)"
+                                  >
+                                    {trf.reviewedBy ? 'Edit Review' : 'Review Items'}
+                                  </button>
                                 )}
                               </div>
-                              <div>
+                              <div className="flex flex-wrap items-center gap-1.5">
                                 {isCancelled ? (
                                   <span className="text-rose-700 font-semibold">
                                     Cancelled during Super Admin review
                                   </span>
                                 ) : isPending ? (
-                                  <span className="text-amber-700 font-semibold">
-                                    Recv: Pending receipt confirmation
-                                  </span>
+                                  <>
+                                    <span className="text-amber-700 font-semibold">
+                                      Recv: Pending receipt confirmation
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleConfirmReceiveStr(trf)}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase cursor-pointer"
+                                      title={`Mark as Received by ${currentUser.name}`}
+                                    >
+                                      <Check className="w-3 h-3" /> Mark Received
+                                    </button>
+                                  </>
                                 ) : (
                                   <span className="text-emerald-800">
                                     Recv: <strong>{trf.receivedBy}</strong>
@@ -4322,38 +5285,16 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                     )}
                                   </span>
                                 )}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 text-right whitespace-nowrap">
-                              <div className="inline-flex items-center gap-1">
-                                {isSuperAdmin && isPending && !trf.reviewedBy && (
+                                {isSuperAdmin && onDeleteStockTransfer && (
                                   <button
                                     type="button"
-                                    onClick={() => handleConfirmReviewStr(trf)}
-                                    className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-[10px] font-black uppercase cursor-pointer"
-                                    title="Check requested items & cancel unavailable stock (Super Admin only)"
+                                    onClick={() => handleConfirmDeleteStr(trf)}
+                                    className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-black uppercase cursor-pointer"
+                                    title="Delete STR record and reverse linked stock"
                                   >
-                                    Review Items
+                                    <Trash2 className="w-3 h-3" /> Delete
                                   </button>
                                 )}
-                                {isPending && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleConfirmReceiveStr(trf)}
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase cursor-pointer"
-                                    title={`Mark as Received by ${currentUser.name}`}
-                                  >
-                                    <Check className="w-3 h-3" /> Mark Received
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => handleExportGoogleSheetXlsx([trf])}
-                                  className="p-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 cursor-pointer"
-                                  title="Export STR to Excel"
-                                >
-                                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                                </button>
                               </div>
                             </td>
                           </tr>
@@ -4449,16 +5390,27 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
               )}
             </div>
 
-            {isSuperAdmin && (
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
-                onClick={handleOpenAddLedgerModal}
-                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-xs font-black whitespace-nowrap cursor-pointer shrink-0"
+                onClick={handleExportLedgerXlsx}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold whitespace-nowrap cursor-pointer transition-colors"
+                title="Export filtered movement ledger to Excel"
               >
-                <Plus className="w-3.5 h-3.5" />
-                Add Entry
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                Export Excel
               </button>
-            )}
+              {isSuperAdmin && (
+                <button
+                  type="button"
+                  onClick={handleOpenAddLedgerModal}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950 text-xs font-black whitespace-nowrap cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add Entry
+                </button>
+              )}
+            </div>
           </div>
 
           {filteredMovements.length === 0 ? (
@@ -4591,8 +5543,8 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                       <th className="px-3 py-2 font-black">Branch To</th>
                       <th className="px-3 py-2 font-black">Ref #</th>
                       <th className="px-3 py-2 font-black">Item & Batch</th>
-                      <th className="px-3 py-2 font-black text-right">Prev</th>
                       <th className="px-3 py-2 font-black text-right">Qty</th>
+                      <th className="px-3 py-2 font-black text-right">Prev</th>
                       <th className="px-3 py-2 font-black text-right">New</th>
                       <th className="px-3 py-2 font-black text-center">Remarks</th>
                       <th className="px-3 py-2 font-black">By</th>
@@ -4642,9 +5594,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               {mov.category} · {mov.batchNo || '—'} · {mov.uom}
                             </div>
                           </td>
-                          <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-500">
-                            {mov.previousQty}
-                          </td>
                           <td
                             className={`px-3 py-2 text-right font-mono font-black tabular-nums ${
                               isInbound ? 'text-emerald-700' : 'text-rose-600'
@@ -4652,6 +5601,9 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           >
                             {isInbound ? '+' : '-'}
                             {mov.quantity}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-500">
+                            {mov.previousQty}
                           </td>
                           <td className="px-3 py-2 text-right font-mono font-black tabular-nums text-zinc-950">
                             {mov.newQty}
@@ -4921,7 +5873,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                 </div>
                 <div>
                   <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
-                    Batch / Exp
+                    Batch / Exp <span className="text-zinc-400 font-semibold normal-case">(Optional)</span>
                   </label>
                   <input
                     type="text"
@@ -4934,7 +5886,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         setItemExpiryDate(parsed);
                       }
                     }}
-                    placeholder="e.g. 10-31-28"
+                    placeholder="Optional (leave blank if N/A)"
                     className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 font-mono text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
                   />
                 </div>
@@ -4958,7 +5910,7 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
 
               <div>
                 <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
-                  Expiry Date (Near-Expiry Alerts ≤{NEAR_EXPIRY_THRESHOLD_DAYS} Days)
+                  Expiry Date <span className="text-zinc-400 font-semibold normal-case">(Optional · Near-Expiry Alerts ≤{NEAR_EXPIRY_THRESHOLD_DAYS}d)</span>
                 </label>
                 <div className="flex items-center gap-2">
                   <input
@@ -5375,10 +6327,10 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <tr>
                           <th className="px-3 py-2 w-24">Code</th>
                           <th className="px-3 py-2">Item Description</th>
+                          <th className="px-3 py-2 text-right">Qty (On Hand)</th>
+                          <th className="px-3 py-2 text-center">UOM</th>
                           <th className="px-3 py-2">Category</th>
                           <th className="px-3 py-2">Batch / Exp</th>
-                          <th className="px-3 py-2 text-center">UOM</th>
-                          <th className="px-3 py-2 text-right">On Hand</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-zinc-200">
@@ -5410,6 +6362,25 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                               <td className="px-3 py-2 font-bold text-zinc-900">
                                 {item.description}
                               </td>
+                              <td
+                                className={`px-3 py-2 text-right font-mono font-black tabular-nums whitespace-nowrap ${
+                                  isZeroQty
+                                    ? 'text-zinc-500'
+                                    : isLow
+                                    ? 'text-rose-700'
+                                    : 'text-zinc-950'
+                                }`}
+                              >
+                                <span>{item.quantity}</span>
+                                {isZeroQty && (
+                                  <span className="ml-1.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-sans text-[9px] font-black uppercase">
+                                    0 Stock
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-center font-semibold text-zinc-700 whitespace-nowrap">
+                                {item.uom}
+                              </td>
                               <td className="px-3 py-2 text-[11px] text-zinc-600 whitespace-nowrap">
                                 {item.category}
                               </td>
@@ -5424,25 +6395,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                     }`}
                                   >
                                     {expEval.label}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-center font-semibold text-zinc-700 whitespace-nowrap">
-                                {item.uom}
-                              </td>
-                              <td
-                                className={`px-3 py-2 text-right font-mono font-black tabular-nums whitespace-nowrap ${
-                                  isZeroQty
-                                    ? 'text-zinc-500'
-                                    : isLow
-                                    ? 'text-rose-700'
-                                    : 'text-zinc-950'
-                                }`}
-                              >
-                                <span>{item.quantity}</span>
-                                {isZeroQty && (
-                                  <span className="ml-1.5 px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 font-sans text-[9px] font-black uppercase">
-                                    0 Stock
                                   </span>
                                 )}
                               </td>
@@ -5514,12 +6466,12 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                       <tr>
                         <th className="px-3 py-2 w-24">Code</th>
                         <th className="px-3 py-2">Item Description</th>
+                        {isMonitoredWarehouseBranch(fromBranchCode) && (
+                          <th className="px-3 py-2 text-right">Qty (On Hand)</th>
+                        )}
+                        <th className="px-3 py-2 text-center">UOM</th>
                         <th className="px-3 py-2">Category</th>
                         <th className="px-3 py-2">Batch</th>
-                        <th className="px-3 py-2 text-center">UOM</th>
-                        {isMonitoredWarehouseBranch(fromBranchCode) && (
-                          <th className="px-3 py-2 text-right">On Hand</th>
-                        )}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-200">
@@ -5553,15 +6505,6 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                             <td className="px-3 py-2 font-bold text-zinc-900">
                               {catItem.description}
                             </td>
-                            <td className="px-3 py-2 text-[11px] text-zinc-600 whitespace-nowrap">
-                              {catItem.category}
-                            </td>
-                            <td className="px-3 py-2 font-mono text-[11px] text-zinc-500 whitespace-nowrap">
-                              {catItem.batchNo || '—'}
-                            </td>
-                            <td className="px-3 py-2 text-center font-semibold text-zinc-700 whitespace-nowrap">
-                              {catItem.uom}
-                            </td>
                             {isMonitoredWarehouseBranch(fromBranchCode) && (
                               <td
                                 className={`px-3 py-2 text-right font-mono font-black tabular-nums whitespace-nowrap ${
@@ -5576,6 +6519,15 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                 )}
                               </td>
                             )}
+                            <td className="px-3 py-2 text-center font-semibold text-zinc-700 whitespace-nowrap">
+                              {catItem.uom}
+                            </td>
+                            <td className="px-3 py-2 text-[11px] text-zinc-600 whitespace-nowrap">
+                              {catItem.category}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-[11px] text-zinc-500 whitespace-nowrap">
+                              {catItem.batchNo || '—'}
+                            </td>
                           </tr>
                         );
                       })}
@@ -5695,6 +6647,376 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                   Close
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* PER-ITEM MOVEMENT / HISTORY MODAL                                     */}
+      {/* ===================================================================== */}
+      {historyTargetItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/75 backdrop-blur-xs p-3 sm:p-4">
+          <div className="bg-white rounded-xl border-2 border-zinc-950 shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="bg-zinc-950 text-amber-400 px-4 py-3 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <History className="w-4 h-4 shrink-0" />
+                <div className="min-w-0">
+                  <h3 className="text-xs font-black uppercase tracking-wider truncate">
+                    Item Movement History · {historyTargetItem.description}
+                  </h3>
+                  <p className="text-[11px] text-zinc-300 font-mono truncate">
+                    {historyTargetItem.itemCode ? `${historyTargetItem.itemCode} · ` : ''}
+                    {historyTargetItem.category} · {historyTargetItem.branchName} ({historyTargetItem.branchCode})
+                    {historyTargetItem.batchNo ? ` · Batch ${historyTargetItem.batchNo}` : ''}
+                    {resolveItemExpiryDate(historyTargetItem)
+                      ? ` · Exp ${resolveItemExpiryDate(historyTargetItem)}`
+                      : ''}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistoryTargetItem(null)}
+                className="text-zinc-400 hover:text-white cursor-pointer shrink-0"
+                title="Close Item History"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* KPI Summary Strip */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 px-4 py-3 bg-zinc-50 border-b border-zinc-200 shrink-0">
+              <div className="bg-white rounded-lg border border-zinc-200 px-3 py-2">
+                <span className="block text-[10px] font-black uppercase text-zinc-500">
+                  Current On Hand
+                </span>
+                <div className="font-mono text-base font-black text-zinc-950 tabular-nums">
+                  {Number(historyTargetItem.quantity).toLocaleString()}{' '}
+                  <span className="text-[11px] font-semibold text-zinc-500">
+                    {historyTargetItem.uom}
+                  </span>
+                </div>
+              </div>
+              <div className="bg-white rounded-lg border border-emerald-200 px-3 py-2">
+                <span className="block text-[10px] font-black uppercase text-emerald-700">
+                  Total In (In / Trf In)
+                </span>
+                <div className="font-mono text-base font-black text-emerald-700 tabular-nums">
+                  +{itemHistorySummary.totalIn.toLocaleString()}{' '}
+                  <span className="text-[11px] font-semibold text-emerald-600/80">
+                    {historyTargetItem.uom}
+                  </span>
+                </div>
+              </div>
+              <div className="bg-white rounded-lg border border-rose-200 px-3 py-2">
+                <span className="block text-[10px] font-black uppercase text-rose-700">
+                  Total Out (Out / Trf Out)
+                </span>
+                <div className="font-mono text-base font-black text-rose-600 tabular-nums">
+                  -{itemHistorySummary.totalOut.toLocaleString()}{' '}
+                  <span className="text-[11px] font-semibold text-rose-500/80">
+                    {historyTargetItem.uom}
+                  </span>
+                </div>
+              </div>
+              <div className="bg-white rounded-lg border border-zinc-200 px-3 py-2">
+                <span className="block text-[10px] font-black uppercase text-zinc-500">
+                  Recorded Movements
+                </span>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono text-base font-black text-zinc-950 tabular-nums">
+                    {itemHistorySummary.totalCount}
+                  </span>
+                  {itemHistorySummary.cancelledCount > 0 && (
+                    <span className="text-[10px] font-bold text-rose-600">
+                      ({itemHistorySummary.cancelledCount} cancelled)
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Filter & Export Controls */}
+            <div className="px-4 py-2.5 border-b border-zinc-200 bg-white flex flex-wrap items-center justify-between gap-2 shrink-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center rounded-lg bg-zinc-100 p-0.5 border border-zinc-200">
+                  <button
+                    type="button"
+                    onClick={() => setHistoryBranchScope('ITEM_BRANCH')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer transition-colors ${
+                      historyBranchScope === 'ITEM_BRANCH'
+                        ? 'bg-zinc-950 text-amber-400 shadow-2xs'
+                        : 'text-zinc-600 hover:text-zinc-950'
+                    }`}
+                  >
+                    This Branch ({historyTargetItem.branchCode})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryBranchScope('ALL_BRANCHES')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer transition-colors ${
+                      historyBranchScope === 'ALL_BRANCHES'
+                        ? 'bg-zinc-950 text-amber-400 shadow-2xs'
+                        : 'text-zinc-600 hover:text-zinc-950'
+                    }`}
+                  >
+                    All Branches
+                  </button>
+                </div>
+
+                <select
+                  value={historyTypeFilter}
+                  onChange={(e) => setHistoryTypeFilter(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs font-bold text-zinc-800"
+                >
+                  <option value="ALL">All Movement Types</option>
+                  <option value="STOCK_IN">Stock In</option>
+                  <option value="STOCK_OUT">Stock Out</option>
+                  <option value="TRANSFER_IN">Transfer In</option>
+                  <option value="TRANSFER_OUT">Transfer Out</option>
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleExportItemHistoryXlsx}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold whitespace-nowrap cursor-pointer transition-colors"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                Export Excel ({itemHistoryEntries.length})
+              </button>
+            </div>
+
+            {/* Timeline / Table Body */}
+            <div className="flex-1 overflow-y-auto">
+              {itemHistoryEntries.length === 0 ? (
+                <div className="p-10 text-center space-y-1.5">
+                  <div className="w-10 h-10 rounded-full bg-zinc-100 text-zinc-400 flex items-center justify-center mx-auto">
+                    <History className="w-5 h-5" />
+                  </div>
+                  <p className="text-xs font-bold text-zinc-700">
+                    No movement history recorded yet for this item
+                    {historyBranchScope === 'ITEM_BRANCH'
+                      ? ` in ${historyTargetItem.branchName}`
+                      : ''}
+                    .
+                  </p>
+                  <p className="text-[11px] text-zinc-500">
+                    {historyBranchScope === 'ITEM_BRANCH'
+                      ? 'Try switching to "All Branches" above or clearing the movement type filter.'
+                      : 'Stock In, Stock Out, and STR transfer movements will appear here automatically.'}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Mobile History Cards */}
+                  <div className="md:hidden divide-y divide-zinc-200">
+                    {itemHistoryEntries.map((mov) => {
+                      const isInbound =
+                        mov.movementType === 'STOCK_IN' || mov.movementType === 'TRANSFER_IN';
+                      const branchFrom = getLedgerBranchFrom(mov);
+                      const branchTo = getLedgerBranchTo(mov);
+                      return (
+                        <div key={`item-hist-mob-${mov.id}`} className="p-3.5 space-y-2 bg-white">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {formatMovementBadge(mov.movementType)}
+                                {formatLedgerStatusBadge(mov)}
+                                {historyBranchScope === 'ALL_BRANCHES' && (
+                                  <span className="px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 font-mono text-[10px] font-bold">
+                                    {mov.branchCode}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="font-mono text-[11px] font-bold text-zinc-900 mt-1">
+                                {mov.refNumber}
+                                {mov.transferNumber ? (
+                                  <span className="ml-1 text-[10px] font-normal text-zinc-400">
+                                    ({mov.transferNumber})
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="font-mono text-[10px] text-zinc-500">
+                                {mov.date}
+                                {mov.timestamp ? ` · ${formatStrDateTime(mov.timestamp)}` : ''}
+                              </div>
+                            </div>
+
+                            <div className="text-right shrink-0">
+                              <div
+                                className={`font-mono text-base font-black tabular-nums ${
+                                  isInbound ? 'text-emerald-700' : 'text-rose-600'
+                                }`}
+                              >
+                                {isInbound ? '+' : '-'}
+                                {mov.quantity}
+                              </div>
+                              <div className="text-[10px] font-mono text-zinc-500 tabular-nums">
+                                {mov.previousQty} → <strong className="text-zinc-950">{mov.newQty}</strong>{' '}
+                                {mov.uom}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 p-2 rounded-lg bg-zinc-50 border border-zinc-200 text-[11px]">
+                            <div>
+                              <span className="block text-[9px] font-black uppercase text-zinc-400">
+                                Branch From
+                              </span>
+                              <span className="font-semibold text-zinc-800">{branchFrom}</span>
+                            </div>
+                            <div>
+                              <span className="block text-[9px] font-black uppercase text-zinc-400">
+                                Branch To
+                              </span>
+                              <span className="font-semibold text-zinc-800">{branchTo}</span>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-600">
+                            <span>
+                              By: <strong className="text-zinc-900">{mov.performedBy || '—'}</strong>
+                            </span>
+                            {mov.notes?.trim() && (
+                              <span className="text-zinc-700 italic break-words">
+                                {mov.notes}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Desktop History Table */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead className="sticky top-0 z-10">
+                        <tr className="bg-zinc-950 text-amber-400 uppercase text-[10px] tracking-wider">
+                          <th className="px-3 py-2 font-black">Date / Time</th>
+                          <th className="px-3 py-2 font-black">Type</th>
+                          <th className="px-3 py-2 font-black">Status</th>
+                          {historyBranchScope === 'ALL_BRANCHES' && (
+                            <th className="px-3 py-2 font-black">Branch</th>
+                          )}
+                          <th className="px-3 py-2 font-black">From → To</th>
+                          <th className="px-3 py-2 font-black">Ref #</th>
+                          <th className="px-3 py-2 font-black text-right">Prev</th>
+                          <th className="px-3 py-2 font-black text-right">Qty</th>
+                          <th className="px-3 py-2 font-black text-right">New</th>
+                          <th className="px-3 py-2 font-black">By</th>
+                          <th className="px-3 py-2 font-black">Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-200">
+                        {itemHistoryEntries.map((mov) => {
+                          const isInbound =
+                            mov.movementType === 'STOCK_IN' || mov.movementType === 'TRANSFER_IN';
+                          const branchFrom = getLedgerBranchFrom(mov);
+                          const branchTo = getLedgerBranchTo(mov);
+                          return (
+                            <tr key={`item-hist-desk-${mov.id}`} className="hover:bg-amber-50/40">
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                <div className="font-mono font-semibold text-zinc-900">
+                                  {mov.date}
+                                </div>
+                                {mov.timestamp && (
+                                  <div className="font-mono text-[10px] text-zinc-400">
+                                    {formatStrDateTime(mov.timestamp)}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {formatMovementBadge(mov.movementType)}
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {formatLedgerStatusBadge(mov)}
+                              </td>
+                              {historyBranchScope === 'ALL_BRANCHES' && (
+                                <td className="px-3 py-2 whitespace-nowrap font-bold text-zinc-800">
+                                  {mov.branchName || mov.branchCode}
+                                </td>
+                              )}
+                              <td className="px-3 py-2 text-[11px] text-zinc-700">
+                                <span className="font-medium">{branchFrom}</span>
+                                <span className="mx-1 text-zinc-400">→</span>
+                                <span className="font-medium">{branchTo}</span>
+                              </td>
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                <div className="font-mono font-bold text-zinc-950">
+                                  {mov.refNumber}
+                                </div>
+                                {mov.transferNumber && (
+                                  <div className="font-mono text-[10px] text-zinc-400">
+                                    {mov.transferNumber}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono tabular-nums text-zinc-500">
+                                {mov.previousQty}
+                              </td>
+                              <td
+                                className={`px-3 py-2 text-right font-mono font-black tabular-nums ${
+                                  isInbound ? 'text-emerald-700' : 'text-rose-600'
+                                }`}
+                              >
+                                {isInbound ? '+' : '-'}
+                                {mov.quantity}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono font-black tabular-nums text-zinc-950">
+                                {mov.newQty}
+                              </td>
+                              <td className="px-3 py-2 text-zinc-700 whitespace-nowrap">
+                                {mov.performedBy || '—'}
+                              </td>
+                              <td className="px-3 py-2 text-[11px] text-zinc-600 max-w-[200px]">
+                                {mov.notes?.trim() ? (
+                                  <span className="break-words">{mov.notes}</span>
+                                ) : (
+                                  <span className="text-zinc-400">—</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-4 py-3 border-t border-zinc-200 bg-zinc-50 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = historyTargetItem;
+                  setHistoryTargetItem(null);
+                  setLedgerSearch(target.description || '');
+                  setLedgerBranchFilter(
+                    historyBranchScope === 'ITEM_BRANCH' ? target.branchCode : 'ALL'
+                  );
+                  setLedgerTypeFilter(historyTypeFilter);
+                  setLedgerStatusFilter('ALL');
+                  setLedgerDateFilter('');
+                  setSubTab('ledger');
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-800 font-bold cursor-pointer"
+              >
+                <ArrowLeftRight className="w-3.5 h-3.5 text-amber-600" />
+                Open in Full Movement Ledger
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistoryTargetItem(null)}
+                className="px-4 py-1.5 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-amber-400 text-xs font-bold uppercase cursor-pointer"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
@@ -6241,11 +7563,11 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                         <th className="px-3 py-2 font-black">Branch</th>
                         <th className="px-3 py-2 font-black">Code</th>
                         <th className="px-3 py-2 font-black">Description</th>
-                        <th className="px-3 py-2 font-black">Category</th>
-                        <th className="px-3 py-2 font-black">Expiry</th>
+                        <th className="px-3 py-2 font-black text-right">Qty</th>
                         <th className="px-3 py-2 font-black text-center">UOM</th>
                         <th className="px-3 py-2 font-black text-right">Min</th>
-                        <th className="px-3 py-2 font-black text-right">Qty</th>
+                        <th className="px-3 py-2 font-black">Category</th>
+                        <th className="px-3 py-2 font-black">Expiry</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-200">
@@ -6302,18 +7624,18 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                           <td className="px-3 py-1.5 font-semibold">
                             {row.description || <span className="italic text-rose-600">Empty</span>}
                           </td>
-                          <td className="px-3 py-1.5 text-[11px] whitespace-nowrap">
-                            {row.category}
-                          </td>
-                          <td className="px-3 py-1.5 font-mono text-[11px] whitespace-nowrap">
-                            {row.expiryDate || row.batchNo || '—'}
+                          <td className="px-3 py-1.5 text-right font-mono font-bold tabular-nums">
+                            {row.quantity}
                           </td>
                           <td className="px-3 py-1.5 text-center font-semibold">{row.uom}</td>
                           <td className="px-3 py-1.5 text-right font-mono tabular-nums">
                             {row.reorderLevel}
                           </td>
-                          <td className="px-3 py-1.5 text-right font-mono font-bold tabular-nums">
-                            {row.quantity}
+                          <td className="px-3 py-1.5 text-[11px] whitespace-nowrap">
+                            {row.category}
+                          </td>
+                          <td className="px-3 py-1.5 font-mono text-[11px] whitespace-nowrap">
+                            {row.expiryDate || row.batchNo || '—'}
                           </td>
                         </tr>
                       ))}
@@ -6364,11 +7686,28 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
       {/* SUPER ADMIN STR ITEM-BY-ITEM REVIEW & CANCELLATION MODAL              */}
       {/* ===================================================================== */}
       {reviewingTransfer && isSuperAdmin && (() => {
+        const isMonitoredReviewFrom = isMonitoredWarehouseBranch(reviewingTransfer.fromBranchCode);
         const reviewBranchStock = inventoryItems
           .filter((item) => item.branchCode === reviewingTransfer.fromBranchCode)
           .sort((a, b) => (a.description || '').localeCompare(b.description || ''));
+        const reviewPickerSourceItems: WarehouseInventoryItem[] =
+          reviewBranchStock.length > 0 || isMonitoredReviewFrom
+            ? reviewBranchStock
+            : DEFAULT_STOCK_CATALOG.map((cat, idx) => ({
+                id: `rev-cat-${cat.itemCode || idx}`,
+                itemCode: cat.itemCode,
+                description: cat.description,
+                category: cat.category,
+                batchNo: cat.batchNo,
+                uom: cat.uom,
+                unitPrice: 0,
+                branchCode: reviewingTransfer.fromBranchCode,
+                branchName: reviewingTransfer.fromBranchName,
+                quantity: 999,
+                updatedAt: '',
+              }));
         const reviewPickerQuery = reviewPickerSearch.trim().toLowerCase();
-        const filteredReviewAddStock = reviewBranchStock.filter((item) => {
+        const filteredReviewAddStock = reviewPickerSourceItems.filter((item) => {
           if (reviewPickerCategory !== 'ALL' && item.category !== reviewPickerCategory) {
             return false;
           }
@@ -6511,7 +7850,9 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
                                   isZero ? 'text-rose-700' : 'text-zinc-900'
                                 }`}
                               >
-                                {qty} {item.uom}
+                                {isMonitoredReviewFrom || reviewBranchStock.length > 0
+                                  ? `${qty} ${item.uom}`
+                                  : item.uom}
                               </span>
                               {!isZero && (
                                 <span className="px-2 py-0.5 rounded bg-amber-400 text-zinc-950 text-[10px] font-black uppercase">
@@ -6924,6 +8265,683 @@ export const WarehouseInventoryDashboard: React.FC<WarehouseInventoryDashboardPr
         onClose={() => setIsPrintModalOpen(false)}
         transfer={printableTransfer}
       />
+
+      {/* ===================================================================== */}
+      {/* SUPER ADMIN BULK STOCK IN (DELIVERY) MODAL                            */}
+      {/* ===================================================================== */}
+      {showBulkStockInModal && isSuperAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/75 backdrop-blur-xs p-2 sm:p-4">
+          <div className="bg-white rounded-xl border-2 border-zinc-950 shadow-2xl w-full max-w-5xl overflow-hidden flex flex-col max-h-[92vh]">
+            <datalist id="bulk-stockin-code-list">
+              {bulkInReferences
+                .filter((r) => Boolean(r.itemCode))
+                .map((r) => (
+                  <option key={`bulkin-code-${r.itemCode}-${r.description}`} value={r.itemCode}>
+                    {r.description}
+                  </option>
+                ))}
+            </datalist>
+            <datalist id="bulk-stockin-desc-list">
+              {bulkInReferences.map((r) => (
+                <option key={`bulkin-desc-${r.description}-${r.itemCode}`} value={r.description}>
+                  {r.itemCode ? `${r.itemCode} · ${r.category}` : r.category}
+                </option>
+              ))}
+            </datalist>
+
+            {/* Modal Header */}
+            <div className="bg-zinc-950 text-amber-400 px-4 py-3 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                  <ArrowDownToLine className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-xs font-black uppercase tracking-wider truncate">
+                    Bulk Stock In · Warehouse Delivery Receiving
+                  </h3>
+                  <p className="text-[11px] text-zinc-300 truncate">
+                    Add multiple delivered items in one batch and automatically record Stock In ledger entries.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBulkStockInModal(false)}
+                className="text-zinc-400 hover:text-white cursor-pointer shrink-0"
+                title="Close Bulk Stock In"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitBulkStockIn} className="flex-1 flex flex-col min-h-0">
+              {/* Delivery Header Fields */}
+              <div className="px-4 py-3 bg-zinc-50 border-b border-zinc-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 shrink-0">
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
+                    Receiving Branch *
+                  </label>
+                  <select
+                    value={bulkInBranch}
+                    onChange={(e) =>
+                      handleBulkInBranchChange(e.target.value as WarehouseBranchCode)
+                    }
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs font-bold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  >
+                    <optgroup label="Warehouse Branches (Monitored)">
+                      {WAREHOUSE_BRANCHES.map((b) => (
+                        <option key={b.code} value={b.code}>
+                          {b.name} ({b.code})
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Store Branches">
+                      {STORE_BRANCHES.map((b) => (
+                        <option key={b.code} value={b.code}>
+                          {b.name} ({b.code})
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
+                    Delivery Date *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={bulkInDate}
+                    onChange={(e) => setBulkInDate(e.target.value)}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white font-mono text-xs font-bold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
+                    Delivery / DR Ref # *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={bulkInRef}
+                    onChange={(e) => setBulkInRef(e.target.value)}
+                    placeholder="e.g. DEL-261124-01"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white font-mono text-xs font-bold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
+                    Supplier / Source
+                  </label>
+                  <input
+                    type="text"
+                    value={bulkInSource}
+                    onChange={(e) => setBulkInSource(e.target.value)}
+                    placeholder="e.g. Commissary / Supplier"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs font-semibold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-zinc-600 mb-1">
+                    Delivery Notes / Remarks
+                  </label>
+                  <input
+                    type="text"
+                    value={bulkInNotes}
+                    onChange={(e) => setBulkInNotes(e.target.value)}
+                    placeholder="Optional notes for ledger"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+              </div>
+
+              {/* Action Toolbar inside Modal */}
+              <div className="px-4 py-2 border-b border-zinc-200 bg-white flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkPickerOpen((v) => !v)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-colors ${
+                      isBulkPickerOpen
+                        ? 'bg-zinc-950 text-amber-400'
+                        : 'bg-amber-400 hover:bg-amber-300 text-zinc-950 border border-zinc-950'
+                    }`}
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                    {isBulkPickerOpen ? 'Hide Quick-Select Picker' : 'Pick Items from Inventory'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleLoadLowStockToBulkIn}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 text-xs font-bold cursor-pointer transition-colors"
+                    title="Auto-load low stock and 0-stock items in this branch"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                    Load Low / 0-Stock Items
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setBulkInLines((prev) => [...prev, createEmptyBulkInLine()])
+                    }
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-900 border border-zinc-300 text-xs font-bold cursor-pointer transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Blank Row
+                  </button>
+                </div>
+
+                {bulkInLines.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setBulkInLines([createEmptyBulkInLine()])}
+                    className="text-[11px] font-bold text-zinc-500 hover:text-rose-600 cursor-pointer"
+                  >
+                    Reset List
+                  </button>
+                )}
+              </div>
+
+              {/* Scrollable Split Body: Optional Multi-Select Picker + Delivery Line Items */}
+              <div className="flex-1 overflow-y-auto divide-y divide-zinc-200">
+                {isBulkPickerOpen && (
+                  <div className="p-3 bg-amber-50/40 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2 flex-1">
+                        <div className="inline-flex rounded-lg bg-white border border-zinc-300 p-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setBulkPickerSource('BRANCH')}
+                            className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer ${
+                              bulkPickerSource === 'BRANCH'
+                                ? 'bg-zinc-950 text-amber-400'
+                                : 'text-zinc-600 hover:text-zinc-950'
+                            }`}
+                          >
+                            Branch Stock ({bulkBranchStock.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBulkPickerSource('CATALOG')}
+                            className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer ${
+                              bulkPickerSource === 'CATALOG'
+                                ? 'bg-zinc-950 text-amber-400'
+                                : 'text-zinc-600 hover:text-zinc-950'
+                            }`}
+                          >
+                            Master Catalog ({DEFAULT_STOCK_CATALOG.length})
+                          </button>
+                        </div>
+
+                        <div className="relative flex-1 min-w-[180px] max-w-xs">
+                          <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            value={bulkPickerSearch}
+                            onChange={(e) => setBulkPickerSearch(e.target.value)}
+                            placeholder="Search item code, name, batch..."
+                            className="w-full pl-8 pr-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
+                          />
+                        </div>
+
+                        <select
+                          value={bulkPickerCategory}
+                          onChange={(e) => setBulkPickerCategory(e.target.value)}
+                          className="px-2.5 py-1.5 rounded-lg border border-zinc-300 bg-white text-xs font-bold text-zinc-800"
+                        >
+                          <option value="ALL">All Categories</option>
+                          {categoryOptions.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="max-h-48 overflow-y-auto rounded-lg border border-zinc-200 bg-white divide-y divide-zinc-100">
+                      {bulkPickerSource === 'BRANCH' ? (
+                        filteredBulkBranchStock.length === 0 ? (
+                          <div className="p-4 text-center text-xs text-zinc-500">
+                            No matching items in {getBranchByCode(bulkInBranch)?.name}. Switch to Master Catalog or type a new item below.
+                          </div>
+                        ) : (
+                          filteredBulkBranchStock.slice(0, 80).map((item) => {
+                            const isLow = isItemLowStock(item);
+                            const isAdded = bulkInLines.some(
+                              (l) =>
+                                l.itemId === item.id ||
+                                (l.description.trim().toLowerCase() ===
+                                  item.description.trim().toLowerCase() &&
+                                  l.batchNo.trim().toLowerCase() ===
+                                    (item.batchNo || '').trim().toLowerCase())
+                            );
+                            return (
+                              <div
+                                key={`bulk-pick-${item.id}`}
+                                className="px-3 py-2 flex items-center justify-between gap-2 hover:bg-amber-50/60"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    {item.itemCode && (
+                                      <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600">
+                                        {item.itemCode}
+                                      </span>
+                                    )}
+                                    <span className="font-bold text-xs text-zinc-950 truncate">
+                                      {item.description}
+                                    </span>
+                                    <span className="text-[10px] font-semibold text-zinc-500">
+                                      · {item.category}
+                                    </span>
+                                    {item.batchNo && (
+                                      <span className="font-mono text-[10px] text-zinc-500">
+                                        · Batch {item.batchNo}
+                                      </span>
+                                    )}
+                                    {isLow && (
+                                      <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[9.5px] font-black uppercase">
+                                        {item.quantity <= 0 ? '0 Stock' : 'Low'}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2.5 shrink-0">
+                                  <span className="font-mono text-[11px] font-bold text-zinc-600 tabular-nums">
+                                    On Hand: {item.quantity} {item.uom}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddStockItemToBulkIn(item)}
+                                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-black cursor-pointer transition-colors ${
+                                      isAdded
+                                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                                        : 'bg-zinc-950 hover:bg-zinc-800 text-amber-400'
+                                    }`}
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                    {isAdded ? '+1 More' : 'Add'}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )
+                      ) : filteredBulkCatalog.length === 0 ? (
+                        <div className="p-4 text-center text-xs text-zinc-500">
+                          No matching items in Master Catalog.
+                        </div>
+                      ) : (
+                        filteredBulkCatalog.slice(0, 80).map((catItem, idx) => (
+                          <div
+                            key={`bulk-cat-${catItem.itemCode || idx}-${catItem.description}`}
+                            className="px-3 py-2 flex items-center justify-between gap-2 hover:bg-amber-50/60"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {catItem.itemCode && (
+                                  <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600">
+                                    {catItem.itemCode}
+                                  </span>
+                                )}
+                                <span className="font-bold text-xs text-zinc-950 truncate">
+                                  {catItem.description}
+                                </span>
+                                <span className="text-[10px] font-semibold text-zinc-500">
+                                  · {catItem.category} · {catItem.uom}
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleAddCatalogItemToBulkIn(catItem)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-zinc-950 hover:bg-zinc-800 text-amber-400 text-[11px] font-black cursor-pointer shrink-0"
+                            >
+                              <Plus className="w-3 h-3" />
+                              Add
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Line Items Table / Cards */}
+                <div className="p-3 sm:p-4">
+                  {bulkInLines.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-zinc-500 border border-dashed border-zinc-300 rounded-lg">
+                      No delivery items added yet. Use <strong>Pick Items from Inventory</strong> or{' '}
+                      <strong>Add Blank Row</strong> above.
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      <div className="hidden md:block overflow-x-auto rounded-lg border border-zinc-200">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-zinc-950 text-amber-400 uppercase text-[10px] tracking-wider">
+                              <th className="px-2.5 py-2 font-black w-8">#</th>
+                              <th className="px-2.5 py-2 font-black w-28">Code</th>
+                              <th className="px-2.5 py-2 font-black text-right w-28">
+                                Qty (+) *
+                              </th>
+                              <th className="px-2.5 py-2 font-black min-w-[200px]">Description *</th>
+                              <th className="px-2.5 py-2 font-black w-24">UOM</th>
+                              <th className="px-2.5 py-2 font-black w-32">Category</th>
+                              <th className="px-2.5 py-2 font-black w-28">Batch / Exp</th>
+                              <th className="px-2.5 py-2 font-black text-right w-28">
+                                Balance Preview
+                              </th>
+                              <th className="px-2.5 py-2 font-black text-center w-10"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-zinc-200 bg-white">
+                            {bulkInLines.map((line, idx) => {
+                              const currentOnHand = getBulkLineCurrentQty(line);
+                              const addQty = Math.max(0, Number(line.quantity) || 0);
+                              const nextQty = (currentOnHand ?? 0) + addQty;
+                              return (
+                                <tr key={line.id} className="hover:bg-zinc-50/70">
+                                  <td className="px-2.5 py-2 font-mono text-[11px] font-bold text-zinc-400">
+                                    {idx + 1}
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    <input
+                                      type="text"
+                                      list="bulk-stockin-code-list"
+                                      value={line.itemCode}
+                                      onChange={(e) =>
+                                        handleBulkLineCodeChange(line.id, e.target.value)
+                                      }
+                                      placeholder="Code"
+                                      className="w-full px-2 py-1 rounded border border-zinc-300 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                    />
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step="any"
+                                      value={line.quantity}
+                                      onChange={(e) =>
+                                        setBulkInLines((prev) =>
+                                          prev.map((r) =>
+                                            r.id === line.id
+                                              ? { ...r, quantity: Number(e.target.value) || 0 }
+                                              : r
+                                          )
+                                        )
+                                      }
+                                      className="w-full px-2 py-1 rounded border border-emerald-400 bg-emerald-50/40 font-mono text-xs font-black text-right text-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                    />
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    <input
+                                      type="text"
+                                      list="bulk-stockin-desc-list"
+                                      value={line.description}
+                                      onChange={(e) =>
+                                        handleBulkLineDescChange(line.id, e.target.value)
+                                      }
+                                      placeholder="Item description"
+                                      className="w-full px-2 py-1 rounded border border-zinc-300 text-xs font-semibold text-zinc-950 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                    />
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    <select
+                                      value={line.uom}
+                                      onChange={(e) =>
+                                        setBulkInLines((prev) =>
+                                          prev.map((r) =>
+                                            r.id === line.id ? { ...r, uom: e.target.value } : r
+                                          )
+                                        )
+                                      }
+                                      className="w-full px-2 py-1 rounded border border-zinc-300 text-[11px] font-bold bg-white"
+                                    >
+                                      {WAREHOUSE_UOMS.map((u) => (
+                                        <option key={u} value={u}>
+                                          {u}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    <select
+                                      value={line.category}
+                                      onChange={(e) =>
+                                        setBulkInLines((prev) =>
+                                          prev.map((r) =>
+                                            r.id === line.id
+                                              ? { ...r, category: e.target.value }
+                                              : r
+                                          )
+                                        )
+                                      }
+                                      className="w-full px-2 py-1 rounded border border-zinc-300 text-[11px] font-bold bg-white"
+                                    >
+                                      {categoryOptions.map((c) => (
+                                        <option key={c} value={c}>
+                                          {c}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </td>
+                                  <td className="px-2 py-1.5">
+                                    <input
+                                      type="text"
+                                      value={line.batchNo}
+                                      onChange={(e) =>
+                                        setBulkInLines((prev) =>
+                                          prev.map((r) =>
+                                            r.id === line.id
+                                              ? { ...r, batchNo: e.target.value }
+                                              : r
+                                          )
+                                        )
+                                      }
+                                      placeholder="Batch (opt.)"
+                                      className="w-full px-2 py-1 rounded border border-zinc-300 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                    />
+                                  </td>
+                                  <td className="px-2.5 py-2 text-right font-mono text-[11px] whitespace-nowrap tabular-nums">
+                                    {currentOnHand !== null ? (
+                                      <span>
+                                        <span className="text-zinc-500">{currentOnHand}</span>
+                                        <span className="mx-1 text-zinc-400">→</span>
+                                        <strong className="text-emerald-700">{nextQty}</strong>
+                                      </span>
+                                    ) : (
+                                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-sans text-[10px] font-bold">
+                                        New ({nextQty})
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-2 py-1.5 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setBulkInLines((prev) =>
+                                          prev.filter((r) => r.id !== line.id)
+                                        )
+                                      }
+                                      className="p-1 rounded hover:bg-rose-100 text-zinc-400 hover:text-rose-600 cursor-pointer"
+                                      title="Remove line"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Mobile Delivery Line Cards */}
+                      <div className="md:hidden space-y-2">
+                        {bulkInLines.map((line, idx) => {
+                          const currentOnHand = getBulkLineCurrentQty(line);
+                          const addQty = Math.max(0, Number(line.quantity) || 0);
+                          const nextQty = (currentOnHand ?? 0) + addQty;
+                          return (
+                            <div
+                              key={`mob-${line.id}`}
+                              className="p-3 rounded-lg border border-zinc-200 bg-white space-y-2"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono text-[11px] font-black text-zinc-500">
+                                  #{idx + 1}{' '}
+                                  {currentOnHand !== null
+                                    ? `· On Hand ${currentOnHand} → ${nextQty}`
+                                    : `· New Item (+${addQty})`}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBulkInLines((prev) =>
+                                      prev.filter((r) => r.id !== line.id)
+                                    )
+                                  }
+                                  className="p-1 rounded text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                  title="Remove line"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-2">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="any"
+                                  value={line.quantity}
+                                  onChange={(e) =>
+                                    setBulkInLines((prev) =>
+                                      prev.map((r) =>
+                                        r.id === line.id
+                                          ? { ...r, quantity: Number(e.target.value) || 0 }
+                                          : r
+                                      )
+                                    )
+                                  }
+                                  placeholder="Qty (+)"
+                                  className="px-2 py-1.5 rounded border border-emerald-400 bg-emerald-50/40 font-mono text-xs font-black text-right text-emerald-800"
+                                />
+                                <input
+                                  type="text"
+                                  list="bulk-stockin-desc-list"
+                                  value={line.description}
+                                  onChange={(e) =>
+                                    handleBulkLineDescChange(line.id, e.target.value)
+                                  }
+                                  placeholder="Item Description *"
+                                  className="col-span-2 px-2 py-1.5 rounded border border-zinc-300 text-xs font-bold"
+                                />
+                              </div>
+
+                              <div className="grid grid-cols-3 gap-2">
+                                <input
+                                  type="text"
+                                  list="bulk-stockin-code-list"
+                                  value={line.itemCode}
+                                  onChange={(e) =>
+                                    handleBulkLineCodeChange(line.id, e.target.value)
+                                  }
+                                  placeholder="Code"
+                                  className="px-2 py-1.5 rounded border border-zinc-300 font-mono text-xs"
+                                />
+                                <select
+                                  value={line.uom}
+                                  onChange={(e) =>
+                                    setBulkInLines((prev) =>
+                                      prev.map((r) =>
+                                        r.id === line.id ? { ...r, uom: e.target.value } : r
+                                      )
+                                    )
+                                  }
+                                  className="px-2 py-1.5 rounded border border-zinc-300 text-[11px] font-bold bg-white"
+                                >
+                                  {WAREHOUSE_UOMS.map((u) => (
+                                    <option key={u} value={u}>
+                                      {u}
+                                    </option>
+                                  ))}
+                                </select>
+                                <select
+                                  value={line.category}
+                                  onChange={(e) =>
+                                    setBulkInLines((prev) =>
+                                      prev.map((r) =>
+                                        r.id === line.id ? { ...r, category: e.target.value } : r
+                                      )
+                                    )
+                                  }
+                                  className="px-2 py-1.5 rounded border border-zinc-300 text-[11px] font-bold bg-white"
+                                >
+                                  {categoryOptions.map((c) => (
+                                    <option key={c} value={c}>
+                                      {c}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-4 py-3 border-t border-zinc-200 bg-zinc-50 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+                <div className="flex flex-wrap items-center gap-2 font-mono font-bold text-[11px]">
+                  <span className="px-2 py-0.5 rounded bg-zinc-200 text-zinc-900">
+                    Items:{' '}
+                    {
+                      bulkInLines.filter(
+                        (l) => l.description.trim() && (Number(l.quantity) || 0) > 0
+                      ).length
+                    }
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    Total Stock In: +
+                    {bulkInLines
+                      .filter((l) => l.description.trim() && (Number(l.quantity) || 0) > 0)
+                      .reduce((sum, l) => sum + (Number(l.quantity) || 0), 0)
+                      .toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkStockInModal(false)}
+                    className="px-3.5 py-1.5 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 text-zinc-800 font-bold uppercase cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingBulkIn}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase cursor-pointer disabled:opacity-50"
+                  >
+                    <ArrowDownToLine className="w-3.5 h-3.5" />
+                    {isSubmittingBulkIn ? 'Saving Delivery...' : 'Confirm Bulk Stock In'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

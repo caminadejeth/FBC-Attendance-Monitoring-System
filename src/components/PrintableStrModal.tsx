@@ -104,14 +104,15 @@ export const PrintableStrModal: React.FC<PrintableStrModalProps> = ({
       const mCtx = measureCanvas.getContext('2d');
       if (!mCtx) throw new Error('Canvas not supported');
 
-      // Column widths for items table
+      // Column widths for items table (# | Description | Qty | UOM | Category | Batch No)
+      const qtyColW = innerWidth - (24 + 142 + 38 + 78 + 56) * scale;
       const colW = [
         24 * scale, // #
         142 * scale, // Description
+        qtyColW, // Qty
+        38 * scale, // UOM
         78 * scale, // Category
         56 * scale, // Batch No
-        38 * scale, // UOM
-        innerWidth - (24 + 142 + 78 + 56 + 38) * scale, // Qty
       ];
 
       mCtx.font = `700 ${8.5 * scale}px system-ui, -apple-system, sans-serif`;
@@ -122,8 +123,8 @@ export const PrintableStrModal: React.FC<PrintableStrModalProps> = ({
           : item.description || '';
         const descLines = wrapCanvasText(mCtx, descText, colW[1] - 8 * scale);
         mCtx.font = `500 ${8 * scale}px system-ui, -apple-system, sans-serif`;
-        const catLines = wrapCanvasText(mCtx, item.category || '', colW[2] - 6 * scale);
-        const batchLines = wrapCanvasText(mCtx, item.batchNo || '—', colW[3] - 6 * scale);
+        const catLines = wrapCanvasText(mCtx, item.category || '', colW[4] - 6 * scale);
+        const batchLines = wrapCanvasText(mCtx, item.batchNo || '—', colW[5] - 6 * scale);
         mCtx.font = `700 ${8.5 * scale}px system-ui, -apple-system, sans-serif`;
         const lineCount = Math.max(descLines.length, catLines.length, batchLines.length, 1);
         const rowH = Math.max(18 * scale, lineCount * 10.5 * scale + 7 * scale);
@@ -277,15 +278,15 @@ export const PrintableStrModal: React.FC<PrintableStrModalProps> = ({
       ctx.fillStyle = '#09090b';
       ctx.fillRect(pad, y, innerWidth, tableHeaderH);
 
-      const headers = ['#', 'DESCRIPTION', 'CATEGORY', 'BATCH NO', 'UOM', 'QTY'];
+      const headers = ['#', 'DESCRIPTION', 'QTY', 'UOM', 'CATEGORY', 'BATCH NO'];
       let colX = pad;
       ctx.fillStyle = '#ffffff';
       ctx.font = `800 ${8 * scale}px system-ui, -apple-system, sans-serif`;
       headers.forEach((h, i) => {
-        if (i === 0 || i === 4) {
+        if (i === 0 || i === 3) {
           ctx.textAlign = 'center';
           ctx.fillText(h, colX + colW[i] / 2, y + 6 * scale);
-        } else if (i === 5) {
+        } else if (i === 2) {
           ctx.textAlign = 'right';
           ctx.fillText(h, colX + colW[i] - 4 * scale, y + 6 * scale);
         } else {
@@ -332,13 +333,33 @@ export const PrintableStrModal: React.FC<PrintableStrModalProps> = ({
           ctx.fillText(line, pad + colW[0] + 4 * scale, y + 5 * scale + lIdx * 10.5 * scale);
         });
 
+        // Qty
+        ctx.fillStyle = row.isCancelled ? '#9f1239' : '#09090b';
+        ctx.font = `900 ${8.5 * scale}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        ctx.textAlign = 'right';
+        ctx.fillText(
+          row.isCancelled ? '0' : Number(row.item.quantity).toLocaleString(),
+          pad + colW[0] + colW[1] + colW[2] - 4 * scale,
+          y + 5 * scale
+        );
+
+        // UOM
+        ctx.font = `700 ${8 * scale}px system-ui, -apple-system, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(
+          (row.item.uom || '').toUpperCase(),
+          pad + colW[0] + colW[1] + colW[2] + colW[3] / 2,
+          y + 5 * scale
+        );
+
         // Category
+        ctx.textAlign = 'left';
         ctx.fillStyle = row.isCancelled ? '#9f1239' : '#3f3f46';
         ctx.font = `500 ${7.8 * scale}px system-ui, -apple-system, sans-serif`;
         row.catLines.forEach((line, lIdx) => {
           ctx.fillText(
             line,
-            pad + colW[0] + colW[1] + 3 * scale,
+            pad + colW[0] + colW[1] + colW[2] + colW[3] + 3 * scale,
             y + 5 * scale + lIdx * 10 * scale
           );
         });
@@ -349,29 +370,10 @@ export const PrintableStrModal: React.FC<PrintableStrModalProps> = ({
         row.batchLines.forEach((line, lIdx) => {
           ctx.fillText(
             line,
-            pad + colW[0] + colW[1] + colW[2] + 3 * scale,
+            pad + colW[0] + colW[1] + colW[2] + colW[3] + colW[4] + 3 * scale,
             y + 5 * scale + lIdx * 10 * scale
           );
         });
-
-        // UOM
-        ctx.fillStyle = row.isCancelled ? '#9f1239' : '#09090b';
-        ctx.font = `700 ${8 * scale}px system-ui, -apple-system, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.fillText(
-          (row.item.uom || '').toUpperCase(),
-          pad + colW[0] + colW[1] + colW[2] + colW[3] + colW[4] / 2,
-          y + 5 * scale
-        );
-
-        // Qty
-        ctx.font = `900 ${8.5 * scale}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-        ctx.textAlign = 'right';
-        ctx.fillText(
-          row.isCancelled ? '0' : Number(row.item.quantity).toLocaleString(),
-          width - pad - 4 * scale,
-          y + 5 * scale
-        );
         ctx.textAlign = 'left';
 
         y += row.rowH;
@@ -384,23 +386,28 @@ export const PrintableStrModal: React.FC<PrintableStrModalProps> = ({
       ctx.lineWidth = 1 * scale;
       ctx.strokeRect(pad, y, innerWidth, totalRowH);
 
-      const qtyDividerX = width - pad - colW[5];
+      const qtyStartX = pad + colW[0] + colW[1];
+      const qtyEndX = qtyStartX + colW[2];
       ctx.beginPath();
-      ctx.moveTo(qtyDividerX, y);
-      ctx.lineTo(qtyDividerX, y + totalRowH);
+      ctx.moveTo(qtyStartX, y);
+      ctx.lineTo(qtyStartX, y + totalRowH);
+      ctx.moveTo(qtyEndX, y);
+      ctx.lineTo(qtyEndX, y + totalRowH);
       ctx.stroke();
 
       ctx.fillStyle = '#09090b';
       ctx.font = `900 ${8 * scale}px system-ui, -apple-system, sans-serif`;
       ctx.textAlign = 'right';
       ctx.fillText(
-        `TOTAL ITEMS (${activeItems.length}${cancelledCount > 0 ? `/${safeItems.length}` : ''} LINES) · TOTAL QTY`,
-        qtyDividerX - 6 * scale,
+        `TOTAL (${activeItems.length}${cancelledCount > 0 ? `/${safeItems.length}` : ''} LINES)`,
+        qtyStartX - 6 * scale,
         y + 6 * scale
       );
       ctx.font = `900 ${8.5 * scale}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-      ctx.fillText(totalQty.toLocaleString(), width - pad - 4 * scale, y + 6 * scale);
+      ctx.fillText(totalQty.toLocaleString(), qtyEndX - 4 * scale, y + 6 * scale);
+      ctx.font = `900 ${8 * scale}px system-ui, -apple-system, sans-serif`;
       ctx.textAlign = 'left';
+      ctx.fillText('TOTAL QTY', qtyEndX + 6 * scale, y + 6 * scale);
       y += totalRowH;
 
       // Remarks Box
@@ -693,10 +700,10 @@ export const PrintableStrModal: React.FC<PrintableStrModalProps> = ({
                     <tr className="bg-zinc-950 text-white uppercase">
                       <th className="border border-zinc-950 px-1 py-1 text-center w-5">#</th>
                       <th className="border border-zinc-950 px-1.5 py-1 text-left">Description</th>
+                      <th className="border border-zinc-950 px-1 py-1 text-right">Qty</th>
+                      <th className="border border-zinc-950 px-1 py-1 text-center">UOM</th>
                       <th className="border border-zinc-950 px-1 py-1 text-left">Category</th>
                       <th className="border border-zinc-950 px-1 py-1 text-left">Batch No</th>
-                      <th className="border border-zinc-950 px-1 py-1 text-center">UOM</th>
-                      <th className="border border-zinc-950 px-1 py-1 text-right">Qty</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -722,31 +729,37 @@ export const PrintableStrModal: React.FC<PrintableStrModalProps> = ({
                               </span>
                             )}
                           </td>
+                          <td className="border border-zinc-400 px-1 py-1 text-right font-mono font-black tabular-nums">
+                            {isCancelled ? '0' : Number(item.quantity).toLocaleString()}
+                          </td>
+                          <td className="border border-zinc-400 px-1 py-1 text-center font-bold uppercase">
+                            {item.uom}
+                          </td>
                           <td className="border border-zinc-400 px-1 py-1 text-zinc-700">
                             {item.category}
                           </td>
                           <td className="border border-zinc-400 px-1 py-1 font-mono text-zinc-800">
                             {item.batchNo || '—'}
                           </td>
-                          <td className="border border-zinc-400 px-1 py-1 text-center font-bold uppercase">
-                            {item.uom}
-                          </td>
-                          <td className="border border-zinc-400 px-1 py-1 text-right font-mono font-black tabular-nums">
-                            {isCancelled ? '0' : Number(item.quantity).toLocaleString()}
-                          </td>
                         </tr>
                       );
                     })}
                     <tr className="bg-zinc-100 font-black">
                       <td
-                        colSpan={5}
+                        colSpan={2}
                         className="border border-zinc-950 px-1.5 py-1 text-right uppercase text-[8px]"
                       >
-                        Total Items ({activeItems.length}
-                        {cancelledCount > 0 ? `/${safeItems.length}` : ''} Lines) · Total Qty
+                        Total ({activeItems.length}
+                        {cancelledCount > 0 ? `/${safeItems.length}` : ''} Lines)
                       </td>
                       <td className="border border-zinc-950 px-1 py-1 text-right font-mono tabular-nums">
                         {totalQty.toLocaleString()}
+                      </td>
+                      <td
+                        colSpan={3}
+                        className="border border-zinc-950 px-1.5 py-1 text-left uppercase text-[8px]"
+                      >
+                        Total Qty
                       </td>
                     </tr>
                   </tbody>
