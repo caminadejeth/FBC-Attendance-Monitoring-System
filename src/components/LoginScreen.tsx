@@ -48,7 +48,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ users, onLoginSuccess 
     );
 
     if (matchedUser) {
-      showLoginToast(matchedUser.name, matchedUser.role);
+      if (matchedUser.role === 'ADMIN') {
+        showLoginToast(matchedUser.name, matchedUser.role);
+      }
       onLoginSuccess(matchedUser);
     } else {
       setLoginError('Invalid User ID or PIN. Please verify your credentials.');

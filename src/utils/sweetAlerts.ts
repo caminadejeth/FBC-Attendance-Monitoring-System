@@ -126,33 +126,48 @@ export const showDisputeSuccessAlert = () => {
 };
 
 export const showConfirmDisputeAction = (
-  action: 'APPROVE' | 'REJECT',
+  action: 'APPROVE' | 'REJECT' | 'DISAPPROVE',
   employeeName: string,
   date: string
 ) => {
   const isApprove = action === 'APPROVE';
+  const isDisapprove = action === 'DISAPPROVE';
   return yellowCabSwal.fire({
     icon: isApprove ? 'question' : 'warning',
     iconColor: isApprove ? '#d97706' : '#dc2626',
-    title: `${isApprove ? 'Approve' : 'Reject'} Dispute for ${employeeName}?`,
+    title: isDisapprove
+      ? `Disapprove Approved Adjustment for ${employeeName}?`
+      : `${isApprove ? 'Approve' : 'Reject'} Dispute for ${employeeName}?`,
     html: `<div style="text-align: left;">
       <p style="margin-bottom: 8px;">Date: <b>${date}</b></p>
       <p style="font-size: 12px; color: #52525b;">${
         isApprove
           ? 'Approving will recalculate work hours based on requested clock times and update undertime/overtime records.'
+          : isDisapprove
+          ? 'Disapproving will mark this adjustment as Rejected and revert DTR logs so the time adjustment no longer reflects in attendance records.'
           : 'Rejecting will decline the requested timecard correction.'
       }</p>
     </div>`,
     input: 'text',
-    inputPlaceholder: isApprove ? 'Optional manager remarks...' : 'Reason for rejection (required)...',
+    inputPlaceholder: isApprove
+      ? 'Optional manager remarks...'
+      : isDisapprove
+      ? 'Reason for disapproving (required)...'
+      : 'Reason for rejection (required)...',
     inputValidator: (value) => {
       if (!isApprove && !value?.trim()) {
-        return 'Please enter a rejection reason!';
+        return isDisapprove
+          ? 'Please enter a reason for disapproving!'
+          : 'Please enter a rejection reason!';
       }
       return null;
     },
     showCancelButton: true,
-    confirmButtonText: isApprove ? 'Approve Dispute' : 'Reject Dispute',
+    confirmButtonText: isApprove
+      ? 'Approve Dispute'
+      : isDisapprove
+      ? 'Disapprove & Revert DTR'
+      : 'Reject Dispute',
     cancelButtonText: 'Cancel',
   });
 };

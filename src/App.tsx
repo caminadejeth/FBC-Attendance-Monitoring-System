@@ -28,9 +28,12 @@ import {
 } from './types';
 import {
   parseToYYYYMMDD,
-  calculateGrossHours,
-  getDayOfWeekName,
 } from './utils/timeFormatters';
+import {
+  applyApprovedDisputeToSummary,
+  capturePreApprovalSnapshot,
+  revertSummaryAfterDisputeDisapproval,
+} from './utils/disputeRevertHelper';
 import { isSafeImageSrc } from './utils/imageCompression';
 import {
   INITIAL_DAILY_SUMMARIES,
@@ -745,9 +748,9 @@ export default function App() {
     emailedAlertIdSet,
   ]);
 
-  // Alert logged-in warehouse users once per session when near-expiry or expired stock items exist
+  // Alert logged-in Super Admin once per session when near-expiry or expired stock items exist
   useEffect(() => {
-    if (!currentUser || monitoredNearExpiryEntries.length === 0) return;
+    if (!currentUser || currentUser.role !== 'ADMIN' || monitoredNearExpiryEntries.length === 0) return;
     const todayKey = new Date().toISOString().slice(0, 10);
     const storageKey = `fbc_near_expiry_notified_${currentUser.id}_${todayKey}_${monitoredNearExpiryEntries.length}`;
     try {
@@ -871,6 +874,22 @@ export default function App() {
 
     const normalizedDate = targetDispute.date || (targetDispute as any).targetDate || '';
     const normalizedType = targetDispute.type || (targetDispute as any).disputeType || 'MISSING_PUNCH';
+    const targetDate = parseToYYYYMMDD(normalizedDate);
+
+    const existingSummaryForSnapshot = fullyApproved
+      ? summaries.find(
+          (s) =>
+            s.employeeId === targetDispute.employeeId &&
+            parseToYYYYMMDD(s.date) === targetDate
+        )
+      : undefined;
+    const generatedSummaryId = existingSummaryForSnapshot?.id || `summary-adj-${Date.now()}`;
+
+    const preApprovalSnapshot =
+      fullyApproved && targetDispute.status !== 'APPROVED'
+        ? targetDispute.preApprovalSummarySnapshot ||
+          capturePreApprovalSnapshot(existingSummaryForSnapshot, generatedSummaryId)
+        : targetDispute.preApprovalSummarySnapshot;
 
     const updatedDisputeItem: DisputeRequest = {
       ...targetDispute,
@@ -887,10 +906,13 @@ export default function App() {
       payrollApproved: updatedPayApp,
       payrollApprovedBy: updatedPayBy,
       payrollApprovedAt: updatedPayAt,
+      ...(preApprovalSnapshot ? { preApprovalSummarySnapshot: preApprovalSnapshot } : {}),
     };
+    delete updatedDisputeItem.disapprovedAt;
+    delete updatedDisputeItem.disapprovedBy;
 
     // Save updated dispute directly to Firestore
-    await saveDocument('disputes', updatedDisputeItem);
+    await saveDocument('disputes', updatedDisputeItem, { replace: true });
 
     setDisputes((prev) =>
       prev.map((d) => (d.id === disputeId ? updatedDisputeItem : d))
@@ -904,119 +926,15 @@ export default function App() {
 
     // Recalculate DTR Attendance summary ONLY when fully approved by BOTH or ADMIN
     if (fullyApproved) {
-      const empUser = users.find((u) => u.employeeId === updatedDisputeItem.employeeId);
-      const empName = updatedDisputeItem.employeeName || empUser?.name || 'Staff Member';
-      const dept = empUser?.department || 'Operations';
-
-      const targetDate = parseToYYYYMMDD(updatedDisputeItem.date);
-
-      const existingSummary = summaries.find(
-        (s) => s.employeeId === updatedDisputeItem.employeeId && parseToYYYYMMDD(s.date) === targetDate
+      const updatedSummaryItem = applyApprovedDisputeToSummary(
+        updatedDisputeItem,
+        existingSummaryForSnapshot,
+        users,
+        adminNotes,
+        generatedSummaryId
       );
 
-      const cat = (updatedDisputeItem.category || updatedDisputeItem.type || '').toLowerCase();
-
-      let reqIn = existingSummary?.firstIn || '';
-      let reqOut = existingSummary?.lastOut || '';
-      let reqBreakOut = existingSummary?.breakOut || '';
-      let reqBreakIn = existingSummary?.breakIn || '';
-      const newlyAdjustedFields: string[] = [];
-
-      const isTimeInCat = cat.includes('time-in') || cat.includes('time_in') || cat.includes('time in') || cat.includes('full shift') || cat.includes('full_shift');
-      const isTimeOutCat = cat.includes('time-out') || cat.includes('time_out') || cat.includes('time out') || cat.includes('full shift') || cat.includes('full_shift');
-      const isBreakOutCat = cat.includes('break-out') || cat.includes('break_out') || cat.includes('break out');
-      const isBreakInCat = cat.includes('break-in') || cat.includes('break_in') || cat.includes('break in');
-
-      if (updatedDisputeItem.requestedClockIn || isTimeInCat) {
-        reqIn = updatedDisputeItem.requestedClockIn || reqIn || '08:00:00';
-        newlyAdjustedFields.push('firstIn');
-      }
-      if (updatedDisputeItem.requestedClockOut || isTimeOutCat) {
-        reqOut = updatedDisputeItem.requestedClockOut || reqOut || '17:00:00';
-        newlyAdjustedFields.push('lastOut');
-      }
-      if (updatedDisputeItem.requestedBreakOut || isBreakOutCat) {
-        reqBreakOut = updatedDisputeItem.requestedBreakOut || reqBreakOut;
-        newlyAdjustedFields.push('breakOut');
-      }
-      if (updatedDisputeItem.requestedBreakIn || isBreakInCat) {
-        reqBreakIn = updatedDisputeItem.requestedBreakIn || reqBreakIn;
-        newlyAdjustedFields.push('breakIn');
-      }
-
-      let reqHours = 0;
-      let otHours = 0;
-      let utHours = 0;
-      let finalStatus: AttendanceStatus = 'ADJUSTED';
-
-      if (reqIn && reqOut) {
-        reqHours = updatedDisputeItem.requestedHours || calculateGrossHours(reqIn, reqOut) || 0;
-        otHours = reqHours > 8.0 ? reqHours - 8.0 : 0;
-        utHours = reqHours < 8.0 && reqHours > 0 ? 8.0 - reqHours : 0;
-        finalStatus = otHours > 0 ? 'OVERTIME' : utHours > 0 ? 'UNDERTIME' : 'ADJUSTED';
-      } else if (reqIn) {
-        finalStatus = 'MISSING_OUT';
-      } else if (reqOut) {
-        finalStatus = 'MISSING_IN';
-      } else {
-        finalStatus = 'ABSENT';
-      }
-
-      const reasonNote = `Time Adjustment (${updatedDisputeItem.category || updatedDisputeItem.type}) Approved: ${updatedDisputeItem.reason}${adminNotes ? ` (Notes: ${adminNotes})` : ''}`;
-
-      let updatedSummaryItem: AttendanceSummaryDaily;
-
-      if (existingSummary) {
-        const combinedFields = Array.from(
-          new Set([...(existingSummary.adjustedFields || []), ...newlyAdjustedFields])
-        );
-        const filteredAnomalies = (existingSummary.anomalies || []).filter(
-          (a) => !a.startsWith('Time Adjustment (') && !a.includes(' Approved:')
-        );
-        updatedSummaryItem = {
-          ...existingSummary,
-          status: finalStatus,
-          firstIn: reqIn,
-          lastOut: reqOut,
-          breakOut: reqBreakOut || existingSummary.breakOut,
-          breakIn: reqBreakIn || existingSummary.breakIn,
-          netHoursWorked: reqHours,
-          undertimeHours: utHours,
-          overtimeHours: otHours,
-          anomalies: [reasonNote, ...filteredAnomalies],
-          isAdjusted: true,
-          adjustmentNote: updatedDisputeItem.reason,
-          adjustedFields: combinedFields,
-        };
-      } else {
-        const weekday = getDayOfWeekName(targetDate);
-        updatedSummaryItem = {
-          id: `summary-adj-${Date.now()}`,
-          employeeId: updatedDisputeItem.employeeId,
-          employeeName: empName,
-          department: dept,
-          date: targetDate,
-          weekday: weekday || 'Workday',
-          firstIn: reqIn,
-          lastOut: reqOut,
-          breakOut: reqBreakOut,
-          breakIn: reqBreakIn,
-          totalBreakMinutes: 60,
-          netHoursWorked: reqHours,
-          undertimeHours: utHours,
-          overtimeHours: otHours,
-          ctoHoursEarned: reqHours > 10.0 ? reqHours - 10.0 : 0,
-          targetHours: 8.0,
-          status: finalStatus,
-          anomalies: [reasonNote],
-          punches: [],
-          isAdjusted: true,
-          adjustmentNote: updatedDisputeItem.reason,
-          adjustedFields: newlyAdjustedFields,
-        };
-      }
-
-      await saveDocument('summaries', updatedSummaryItem);
+      await saveDocument('summaries', updatedSummaryItem, { replace: true });
 
       setSummaries((prev) => {
         const idx = prev.findIndex(
@@ -1032,31 +950,102 @@ export default function App() {
     }
   };
 
-  // Handle Dispute Rejection
+  // Handle Dispute Rejection / Admin Disapproval of Mistakenly Approved Adjustment
   const handleRejectDispute = async (disputeId: string, adminNotes: string) => {
-    const currentNow = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const currentNow = new Date().toISOString();
     const targetDispute = disputes.find((d) => d.id === disputeId);
     if (!targetDispute) return;
 
+    const wasApproved = targetDispute.status === 'APPROVED';
+    const normalizedDate = targetDispute.date || (targetDispute as any).targetDate || '';
+    const targetDate = parseToYYYYMMDD(normalizedDate);
+
     const updatedDisputeItem: DisputeRequest = {
       ...targetDispute,
-      date: targetDispute.date || (targetDispute as any).targetDate || '',
+      date: normalizedDate,
       type: targetDispute.type || (targetDispute as any).disputeType || 'MISSING_PUNCH',
       status: 'REJECTED',
       adminNotes,
       reviewedBy: currentUser?.name || 'Branch Manager / Admin',
       reviewedAt: currentNow,
+      managerApproved: false,
+      payrollApproved: false,
+      ...(wasApproved
+        ? {
+            disapprovedBy: currentUser?.name || 'System Admin',
+            disapprovedAt: currentNow,
+          }
+        : {}),
     };
+    delete updatedDisputeItem.approvedAt;
+    delete updatedDisputeItem.managerApprovedBy;
+    delete updatedDisputeItem.managerApprovedAt;
+    delete updatedDisputeItem.payrollApprovedBy;
+    delete updatedDisputeItem.payrollApprovedAt;
+    delete updatedDisputeItem.preApprovalSummarySnapshot;
 
-    await saveDocument('disputes', updatedDisputeItem);
+    await saveDocument('disputes', updatedDisputeItem, { replace: true });
 
     setDisputes((prev) =>
       prev.map((d) => (d.id === disputeId ? updatedDisputeItem : d))
     );
 
+    if (wasApproved) {
+      const existingSummary = summaries.find(
+        (s) =>
+          s.employeeId === updatedDisputeItem.employeeId &&
+          parseToYYYYMMDD(s.date) === targetDate
+      );
+
+      const remainingApprovedDisputesForDay = disputes.filter(
+        (d) =>
+          d.id !== disputeId &&
+          d.employeeId === updatedDisputeItem.employeeId &&
+          d.status === 'APPROVED' &&
+          parseToYYYYMMDD(d.date || (d as any).targetDate || '') === targetDate
+      );
+
+      const dayPunches = punches.filter(
+        (p) =>
+          p.employeeId === updatedDisputeItem.employeeId &&
+          parseToYYYYMMDD((p.timestamp || '').split(' ')[0]) === targetDate
+      );
+
+      const revertResult = revertSummaryAfterDisputeDisapproval({
+        targetDispute,
+        remainingApprovedDisputesForDay,
+        existingSummary,
+        dayPunches,
+        users,
+      });
+
+      if (revertResult.action === 'DELETE') {
+        await removeDocument('summaries', revertResult.summaryId);
+        setSummaries((prev) => prev.filter((s) => s.id !== revertResult.summaryId));
+      } else if (revertResult.action === 'UPDATE') {
+        await saveDocument('summaries', revertResult.summary, { replace: true });
+        setSummaries((prev) => {
+          const idx = prev.findIndex(
+            (s) =>
+              s.id === revertResult.summary.id ||
+              (s.employeeId === revertResult.summary.employeeId &&
+                parseToYYYYMMDD(s.date) === targetDate)
+          );
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = revertResult.summary;
+            return next;
+          }
+          return [revertResult.summary, ...prev];
+        });
+      }
+    }
+
     logActivity(
       'DISPUTE_REJECTION',
-      `Rejected dispute for ${updatedDisputeItem.employeeName} (${updatedDisputeItem.category || updatedDisputeItem.type} on ${updatedDisputeItem.date}).`,
+      wasApproved
+        ? `Disapproved previously approved adjustment for ${updatedDisputeItem.employeeName} (${updatedDisputeItem.category || updatedDisputeItem.type} on ${updatedDisputeItem.date}) and reverted DTR logs. Reason: ${adminNotes}`
+        : `Rejected dispute for ${updatedDisputeItem.employeeName} (${updatedDisputeItem.category || updatedDisputeItem.type} on ${updatedDisputeItem.date}).`,
       'Disputes'
     );
   };

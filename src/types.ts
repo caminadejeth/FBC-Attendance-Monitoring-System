@@ -135,6 +135,25 @@ export type DisputeType =
 
 export type DisputeStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
+export interface DisputeSummarySnapshot {
+  existed: boolean;
+  summaryId: string;
+  status?: AttendanceStatus;
+  firstIn?: string | null;
+  lastOut?: string | null;
+  breakOut?: string | null;
+  breakIn?: string | null;
+  totalBreakMinutes?: number;
+  netHoursWorked?: number;
+  undertimeHours?: number;
+  overtimeHours?: number;
+  ctoHoursEarned?: number;
+  anomalies?: string[];
+  isAdjusted?: boolean;
+  adjustmentNote?: string | null;
+  adjustedFields?: string[];
+}
+
 export interface DisputeRequest {
   id: string;
   employeeId: string;
@@ -158,12 +177,15 @@ export interface DisputeRequest {
   reviewedBy?: string;
   reviewedAt?: string;
   approvedAt?: string;
+  disapprovedAt?: string;
+  disapprovedBy?: string;
   managerApproved?: boolean;
   managerApprovedBy?: string;
   managerApprovedAt?: string;
   payrollApproved?: boolean;
   payrollApprovedBy?: string;
   payrollApprovedAt?: string;
+  preApprovalSummarySnapshot?: DisputeSummarySnapshot;
 }
 
 export interface PayrollPeriodSummary {

@@ -172,19 +172,27 @@ export const DisputeCardDetails: React.FC<DisputeCardDetailsProps> = ({ dispute 
             <div className="flex items-center justify-between font-bold text-xs text-rose-900 flex-wrap gap-1">
               <span className="flex items-center gap-1 text-rose-900">
                 <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                Adjustment Rejected
+                {dispute.disapprovedAt
+                  ? 'Disapproved by Admin (Reverted from DTR Logs)'
+                  : 'Adjustment Rejected'}
               </span>
               <span className="font-mono text-[10px] bg-rose-200 text-rose-950 px-2 py-0.5 rounded font-black border border-rose-400">
-                Rejected: {formatRealtimeTimestamp(dispute.reviewedAt || dispute.submittedAt)}
+                {dispute.disapprovedAt ? 'Disapproved' : 'Rejected'}:{' '}
+                {formatRealtimeTimestamp(dispute.disapprovedAt || dispute.reviewedAt || dispute.submittedAt)}
               </span>
             </div>
             <div className="text-[11px] font-semibold text-rose-850 flex items-center gap-1.5 pt-0.5">
               <UserCheck className="w-3.5 h-3.5 text-rose-700 shrink-0" />
-              <span>Reviewed By: <strong className="text-rose-950">{dispute.reviewedBy || 'Manager / Payroll'}</strong></span>
+              <span>
+                {dispute.disapprovedBy ? 'Disapproved By: ' : 'Reviewed By: '}
+                <strong className="text-rose-950">
+                  {dispute.disapprovedBy || dispute.reviewedBy || 'Manager / Payroll'}
+                </strong>
+              </span>
             </div>
             {dispute.adminNotes && (
               <p className="text-[11px] text-rose-900 italic bg-white/70 p-1.5 rounded border border-rose-200 mt-1">
-                Rejection Reason: "{dispute.adminNotes}"
+                {dispute.disapprovedAt ? 'Disapproval Reason' : 'Rejection Reason'}: "{dispute.adminNotes}"
               </p>
             )}
           </div>

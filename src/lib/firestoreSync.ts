@@ -584,7 +584,8 @@ export function cleanUndefined<T>(obj: T): T {
 
 export async function saveDocument<T extends { id: string }>(
   collectionName: string,
-  item: T
+  item: T,
+  options?: { replace?: boolean }
 ): Promise<boolean> {
   if (!item?.id) {
     console.error(`Cannot save to ${collectionName}: missing document id`, item);
@@ -593,7 +594,12 @@ export async function saveDocument<T extends { id: string }>(
   unmarkDeletedId(collectionName, item.id);
   try {
     const cleanedItem = cleanUndefined(item);
-    await setDoc(doc(db, collectionName, item.id), cleanedItem, { merge: true });
+    const docRef = doc(db, collectionName, item.id);
+    if (options?.replace) {
+      await setDoc(docRef, cleanedItem);
+    } else {
+      await setDoc(docRef, cleanedItem, { merge: true });
+    }
     return true;
   } catch (error) {
     logFirestoreError(error, OperationType.WRITE, `${collectionName}/${item.id}`);

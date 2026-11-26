@@ -107,8 +107,8 @@ interface AdminDashboardProps {
   onSaveSchedule?: (schedule: WorkSchedule) => void;
   onUploadProcessed: (newSummaries: AttendanceSummaryDaily[]) => void;
   onUpdateSummaryAnomaly?: (summaryId: string, newNote: string) => void;
-  onApproveDispute: (disputeId: string, adminNotes: string, approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => void;
-  onRejectDispute: (disputeId: string, adminNotes: string) => void;
+  onApproveDispute: (disputeId: string, adminNotes: string, approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => Promise<void> | void;
+  onRejectDispute: (disputeId: string, adminNotes: string) => Promise<void> | void;
   onSubmitDispute?: (dispute: Omit<DisputeRequest, 'id' | 'status' | 'submittedAt'>) => void;
   onApproveCtoRequest?: (id: string, notes?: string, approverRole?: 'MANAGER' | 'PAYROLL' | 'ADMIN') => void;
   onRejectCtoRequest?: (id: string, notes?: string) => void;
@@ -2265,7 +2265,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={async () => {
                             const result = await showConfirmDisputeAction('REJECT', d.employeeName, d.date);
                             if (result.isConfirmed) {
-                              onRejectDispute(d.id, result.value || 'Disapproved by Owner/Admin');
+                              await onRejectDispute(d.id, result.value || 'Disapproved by Owner/Admin');
                               showSuccessAlert(
                                 'Dispute Rejected',
                                 `Attendance dispute for ${d.employeeName} on ${d.date} was rejected.`
@@ -2281,7 +2281,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           onClick={async () => {
                             const result = await showConfirmDisputeAction('APPROVE', d.employeeName, d.date);
                             if (result.isConfirmed) {
-                              onApproveDispute(d.id, result.value || 'Approved by Owner/Admin', 'ADMIN');
+                              await onApproveDispute(d.id, result.value || 'Approved by Owner/Admin', 'ADMIN');
                               showSuccessAlert(
                                 'Dispute Approved!',
                                 `Attendance dispute for ${d.employeeName} on ${d.date} was approved and timecard recalculated.`
@@ -2291,6 +2291,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#656D4A] hover:bg-[#4A543E] text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
                         >
                           <Check className="w-3.5 h-3.5" /> Approve Adjustment (Admin)
+                        </button>
+                      </div>
+                    )}
+
+                    {d.status === 'APPROVED' && (
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-emerald-200/80">
+                        <span className="text-[10px] font-semibold text-emerald-800">
+                          Reflected in DTR logs — click Disapprove if approved by mistake.
+                        </span>
+                        <button
+                          id={`btn-disapprove-dispute-${d.id}`}
+                          onClick={async () => {
+                            const result = await showConfirmDisputeAction('DISAPPROVE', d.employeeName, d.date);
+                            if (result.isConfirmed) {
+                              await onRejectDispute(d.id, result.value || 'Disapproved by Owner/Admin');
+                              showSuccessAlert(
+                                'Adjustment Disapproved & DTR Reverted',
+                                `Approved adjustment for ${d.employeeName} on ${d.date} was disapproved and removed from DTR logs.`
+                              );
+                            }
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs font-bold shadow-2xs transition-all cursor-pointer"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" /> Disapprove &amp; Revert DTR
                         </button>
                       </div>
                     )}
